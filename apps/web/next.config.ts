@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Lets verification builds run in a separate folder (NEXT_DIST_DIR=.next-verify) so they never
+  // share Turbopack's cache with a running `next dev` (sharing it left dev serving stale modules).
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Dev only: let the cloudflared quick tunnel (used to receive PayPal webhooks locally)
   // reach dev endpoints like the HMR websocket. Without it, a page opened through the
   // tunnel can't connect HMR and the dev client reload-loops. Ignored by `next build`.

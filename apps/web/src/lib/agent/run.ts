@@ -2,6 +2,20 @@ import "server-only";
 import { Command } from "@langchain/langgraph";
 import { ApiError } from "../errors";
 import { getAgent, type AgentInput, type AgentState, type Readback } from "./graph";
+import type { Intent } from "./intent";
+
+/** Build a structured intent (skips the LLM, never Guardian or Confirm). */
+export const structuredIntent = (i: Pick<Intent, "kind"> & Partial<Intent>): Intent => ({
+  recipient: null,
+  members: [],
+  amount: null,
+  currency: null,
+  note: null,
+  includeMe: true,
+  language: "en",
+  clarification: null,
+  ...i,
+});
 
 export type AgentEvent =
   | { type: "thread"; threadId: string }
@@ -105,4 +119,23 @@ export async function collect(events: AsyncGenerator<AgentEvent>) {
   let last: AgentEvent | null = null;
   for await (const e of events) last = e;
   return last;
+}
+
+/**
+ * Start a structured (non-LLM) command through the same graph as voice: Guardian + read-back,
+ * then stop at the confirmation. Returns 202 with the read-back; answer via POST /api/agent/{threadId}.
+ */
+export async function startStructured(userId: string, input: AgentInput): Promise<Response> {
+  const { randomUUID } = await import("node:crypto");
+  const threadId = randomUUID();
+  const last = await collect(runAgent({ userId, threadId, input }));
+  if (last?.type === "confirm") {
+    return Response.json(
+      { threadId, awaiting: "confirmation", answerAt: `/api/agent/${threadId}`, readback: last.readback, guardian: last.view.guardian, quote: last.view.quote },
+      { status: 202 },
+    );
+  }
+  if (last?.type === "final") return Response.json({ threadId, ...last.view }, { status: last.view.outcome === "blocked" ? 403 : 422 });
+  if (last?.type === "error") return Response.json({ error: last.message, code: last.code }, { status: 502 });
+  return Response.json({ error: "No response from the agent" }, { status: 500 });
 }

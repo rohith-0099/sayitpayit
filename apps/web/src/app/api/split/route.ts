@@ -1,38 +1,28 @@
 import { z } from "zod";
-import { amount, currency, handle, recipient, toParty } from "@/lib/api";
-import { createSplit } from "@/lib/payments/service";
+import { amount, currency, handle, recipient } from "@/lib/api";
+import { startStructured, structuredIntent } from "@/lib/agent/run";
 import { getCurrentUser } from "@/lib/users";
 
-const Body = z
-  .object({
-    title: z.string().min(1).max(200),
-    currency: currency.optional(),
-    total: amount.optional(),
-    includeMe: z.boolean().optional(),
-    members: z
-      .array(z.object({ who: recipient, name: z.string().max(100).optional(), amount: amount.optional() }))
-      .min(1)
-      .max(20),
-  })
-  .refine((b) => b.total !== undefined || b.members.every((m) => m.amount !== undefined), {
-    message: "Give a total, or an amount for every member",
-  });
+const Body = z.object({
+  title: z.string().min(1).max(200),
+  /** Bill total, split equally. */
+  total: amount,
+  currency: currency.optional(),
+  /** Whether you pay a share too (default true). */
+  includeMe: z.boolean().optional(),
+  /** Contact names or PayPal emails. */
+  members: z.array(recipient).min(1).max(20),
+});
 
+/** Structured equal split: one invoice per person after Guardian + read-back + your yes (202 until then). */
 export async function POST(req: Request) {
   return handle(async () => {
-    const body = Body.parse(await req.json());
+    const b = Body.parse(await req.json());
     const user = await getCurrentUser();
-    // Resolve everyone first so a typo fails before any invoice is sent.
-    const members = [];
-    for (const m of body.members) members.push({ party: await toParty(user.id, m.who, m.name), amount: m.amount });
-    const result = await createSplit(user, {
-      title: body.title,
-      currency: body.currency ?? user.homeCurrency,
-      total: body.total,
-      includeMe: body.includeMe,
-      members,
+    return startStructured(user.id, {
+      text: `Split ${b.title} ${b.total}${b.currency ? ` ${b.currency}` : ""} with ${b.members.join(", ")}`,
+      source: "api",
+      intent: structuredIntent({ kind: "split", members: b.members, amount: b.total, currency: b.currency ?? null, note: b.title, includeMe: b.includeMe ?? true }),
     });
-    const allOk = result.members.every((m) => m.ok);
-    return Response.json(result, { status: allOk ? 201 : 207 });
   });
 }
