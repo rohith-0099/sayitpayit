@@ -1,6 +1,8 @@
 import "server-only";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
+import type { Contact, User } from "../db/schema";
+import { getRate, round2 } from "../fx";
 import {
   createInvoice,
   createPayout,
@@ -12,40 +14,65 @@ import {
 } from "../paypal";
 import { equalShares, interpretWebhook, payoutItemStatus } from "./logic";
 
-const { transactions, splits, webhookEvents } = schema;
+const { transactions, splits, splitMembers, invoices, contacts, webhookEvents } = schema;
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Who the money goes to / comes from: a saved contact, or a brand-new email. */
+export type Party = { contact: Contact } | { email: string; name?: string };
+
+const partyFields = (p: Party) =>
+  "contact" in p
+    ? {
+        contactId: p.contact.id,
+        counterpartyEmail: p.contact.paypalEmail,
+        counterpartyName: p.contact.fullName ?? p.contact.nickname,
+        relationship: p.contact.relationship,
+      }
+    : { contactId: null, counterpartyEmail: p.email, counterpartyName: p.name ?? null, relationship: null };
+
+async function homeValue(user: User, amount: number, currency: string) {
+  const { rate } = await getRate(currency, user.homeCurrency);
+  return { homeAmount: round2(amount * rate).toFixed(2), fxRate: String(round2(rate * 1e4) / 1e4) };
+}
+
+type Source = "voice" | "text" | "api";
 
 // ---------- Pay (Payouts) ----------
 
 export interface PayInput {
-  to: string;
-  toName?: string;
+  to: Party;
   amount: number;
   currency: string;
   note?: string;
+  command?: string;
+  source?: Source;
 }
 
 /**
  * Execute a payment. Callers MUST have obtained explicit user confirmation first;
  * from Phase 4 only the agent graph's Confirm node may reach this.
  */
-export async function executePay(input: PayInput) {
+export async function executePay(user: User, input: PayInput) {
+  const party = partyFields(input.to);
   const [tx] = await db
     .insert(transactions)
     .values({
+      userId: user.id,
+      ...party,
       type: "pay",
+      source: input.source ?? "api",
       amount: input.amount.toFixed(2),
       currency: input.currency,
-      counterpartyEmail: input.to,
-      counterpartyName: input.toName,
+      ...(await homeValue(user, input.amount, input.currency)),
       note: input.note,
+      command: input.command,
     })
     .returning();
 
   try {
     const batch = await createPayout({
-      receiver: input.to,
+      receiver: party.counterpartyEmail,
       amount: input.amount,
       currency: input.currency,
       note: input.note,
@@ -64,22 +91,21 @@ export async function executePay(input: PayInput) {
 }
 
 /** Pull payout item status from PayPal for still-in-flight payouts (fallback when webhooks can't reach us). */
-export async function syncPendingPayouts() {
+export async function syncPendingPayouts(userId: string) {
   const pending = await db
     .select()
     .from(transactions)
-    .where(inArray(transactions.status, ["sent", "pending"]));
+    .where(and(eq(transactions.userId, userId), eq(transactions.type, "pay"), inArray(transactions.status, ["sent", "pending"])));
   let updated = 0;
   for (const tx of pending) {
-    if (tx.type !== "pay" || !tx.paypalBatchId) continue;
+    if (!tx.paypalBatchId) continue;
     const batch = await getPayout(tx.paypalBatchId);
     const item = batch.items?.find((i) => i.payout_item.sender_item_id === tx.id) ?? batch.items?.[0];
     if (!item) continue;
-    const status = payoutItemStatus(item.transaction_status);
     await db
       .update(transactions)
       .set({
-        status,
+        status: payoutItemStatus(item.transaction_status),
         paypalItemId: item.payout_item_id,
         paypalTransactionId: item.transaction_id,
         fee: item.payout_item_fee?.value,
@@ -95,49 +121,71 @@ export async function syncPendingPayouts() {
 // ---------- Request (Invoicing) ----------
 
 export interface RequestInput {
-  from: string;
-  fromName?: string;
+  from: Party;
   amount: number;
   currency: string;
   note?: string;
   /** Line-item name shown on the invoice. */
   item?: string;
+  command?: string;
+  source?: Source;
   splitId?: string;
 }
 
-export async function createRequest(input: RequestInput) {
+export async function createRequest(user: User, input: RequestInput) {
+  const party = partyFields(input.from);
+  const language = "contact" in input.from ? input.from.contact.language : "en";
+  const itemName = input.item ?? input.note ?? "Payment request";
+
   const [tx] = await db
     .insert(transactions)
     .values({
+      userId: user.id,
+      ...party,
       type: input.splitId ? "split" : "request",
+      source: input.source ?? "api",
       amount: input.amount.toFixed(2),
       currency: input.currency,
-      counterpartyEmail: input.from,
-      counterpartyName: input.fromName,
+      ...(await homeValue(user, input.amount, input.currency)),
       note: input.note,
+      command: input.command,
       splitId: input.splitId,
     })
     .returning();
 
   try {
     const inv = await createInvoice({
-      recipientEmail: input.from,
-      recipientName: input.fromName,
+      recipientEmail: party.counterpartyEmail,
+      recipientName: party.counterpartyName ?? undefined,
       currency: input.currency,
-      items: [{ name: input.item ?? input.note ?? "Payment request", amount: input.amount }],
+      items: [{ name: itemName, amount: input.amount }],
       note: input.note,
       reference: tx.id,
     });
     await db.update(transactions).set({ paypalInvoiceId: inv.id, updatedAt: new Date() }).where(eq(transactions.id, tx.id));
 
-    const { href } = await sendInvoice(inv.id, { subject: `Payment request via SayItPayIt` });
+    const { href } = await sendInvoice(inv.id, { subject: `Payment request from ${user.name} via SayItPayIt` });
     const qr = await generateInvoiceQR(inv.id).catch(() => null); // QR is nice-to-have
+    const payUrl = href ?? inv.detail.metadata?.recipient_view_url ?? null;
+
+    const [invoice] = await db
+      .insert(invoices)
+      .values({
+        transactionId: tx.id,
+        paypalInvoiceId: inv.id,
+        payerViewUrl: payUrl,
+        qrDataUrl: qr,
+        language,
+        items: [{ name: itemName, amount: input.amount }],
+        dueDate: new Date(Date.now() + 7 * 86_400_000),
+      })
+      .returning();
     const [updated] = await db
       .update(transactions)
-      .set({ status: "sent", paypalInvoiceUrl: href ?? inv.detail.metadata?.recipient_view_url, updatedAt: new Date() })
+      .set({ status: "sent", paypalInvoiceUrl: payUrl, updatedAt: new Date() })
       .where(eq(transactions.id, tx.id))
       .returning();
-    return { transaction: updated, invoiceId: inv.id, payUrl: updated.paypalInvoiceUrl, qr };
+    return { transaction: updated, invoice };
   } catch (e) {
     await db.update(transactions).set({ status: "failed", error: errMsg(e), updatedAt: new Date() }).where(eq(transactions.id, tx.id));
     throw e;
@@ -153,44 +201,68 @@ export interface SplitInput {
   total?: number;
   /** Count the user as one of the people splitting (they pay their own share). Default true. */
   includeMe?: boolean;
-  members: { email: string; name?: string; amount?: number }[];
+  members: { party: Party; amount?: number }[];
+  command?: string;
+  source?: Source;
+  receipt?: unknown;
 }
 
-export async function createSplit(input: SplitInput) {
+export async function createSplit(user: User, input: SplitInput) {
   const explicit = input.members.every((m) => m.amount !== undefined);
   let amounts: number[];
+  let myShare: number;
   if (explicit) {
     amounts = input.members.map((m) => m.amount!);
+    const others = amounts.reduce((a, b) => a + b, 0);
+    myShare = input.total !== undefined ? Math.max(round2(input.total - others), 0) : 0;
   } else {
     if (!input.total) throw new Error("total is required for an equal split");
-    const people = input.members.length + (input.includeMe === false ? 0 : 1);
-    const shares = equalShares(input.total, people);
+    const includeMe = input.includeMe !== false;
+    const shares = equalShares(input.total, input.members.length + (includeMe ? 1 : 0));
     // The user keeps the (possibly cent-heavier) first share; members get the rest.
-    amounts = input.includeMe === false ? shares : shares.slice(1);
+    myShare = includeMe ? shares[0] : 0;
+    amounts = includeMe ? shares.slice(1) : shares;
   }
-  const total = input.total ?? amounts.reduce((a, b) => a + b, 0);
+  const total = input.total ?? amounts.reduce((a, b) => a + b, 0) + myShare;
 
   const [split] = await db
     .insert(splits)
-    .values({ title: input.title, total: total.toFixed(2), currency: input.currency })
+    .values({
+      userId: user.id,
+      title: input.title,
+      total: total.toFixed(2),
+      currency: input.currency,
+      myShare: myShare.toFixed(2),
+      receipt: input.receipt,
+    })
     .returning();
 
   // Sequential to stay friendly with sandbox rate limits; partial failures are reported per member.
   const results = [];
   for (const [i, m] of input.members.entries()) {
+    const party = partyFields(m.party);
     try {
-      const r = await createRequest({
-        from: m.email,
-        fromName: m.name,
+      const r = await createRequest(user, {
+        from: m.party,
         amount: amounts[i],
         currency: input.currency,
         note: `Your share of ${input.title}`,
         item: input.title,
+        command: input.command,
+        source: input.source,
         splitId: split.id,
       });
-      results.push({ email: m.email, amount: amounts[i], ok: true as const, ...r });
+      await db.insert(splitMembers).values({
+        splitId: split.id,
+        contactId: party.contactId,
+        name: party.counterpartyName,
+        email: party.counterpartyEmail,
+        share: amounts[i].toFixed(2),
+        transactionId: r.transaction.id,
+      });
+      results.push({ email: party.counterpartyEmail, name: party.counterpartyName, amount: amounts[i], ok: true as const, ...r });
     } catch (e) {
-      results.push({ email: m.email, amount: amounts[i], ok: false as const, error: errMsg(e) });
+      results.push({ email: party.counterpartyEmail, name: party.counterpartyName, amount: amounts[i], ok: false as const, error: errMsg(e) });
     }
   }
   return { split, members: results };
@@ -198,13 +270,35 @@ export async function createSplit(input: SplitInput) {
 
 // ---------- Activity ----------
 
-export function listActivity(limit = 50) {
-  return db.select().from(transactions).orderBy(desc(transactions.createdAt)).limit(limit);
+export function listActivity(userId: string, limit = 50) {
+  return db
+    .select({
+      tx: transactions,
+      contact: { id: contacts.id, nickname: contacts.nickname, country: contacts.country, currency: contacts.currency },
+    })
+    .from(transactions)
+    .leftJoin(contacts, eq(contacts.id, transactions.contactId))
+    .where(eq(transactions.userId, userId))
+    .orderBy(desc(transactions.createdAt))
+    .limit(limit);
+}
+
+/** Open requests/split shares: who still owes the user money. */
+export function listOutstanding(userId: string) {
+  return db
+    .select({ tx: transactions, nickname: contacts.nickname, splitTitle: splits.title })
+    .from(transactions)
+    .leftJoin(contacts, eq(contacts.id, transactions.contactId))
+    .leftJoin(splits, eq(splits.id, transactions.splitId))
+    .where(
+      and(eq(transactions.userId, userId), inArray(transactions.type, ["request", "split"]), eq(transactions.status, "sent")),
+    )
+    .orderBy(desc(transactions.createdAt));
 }
 
 // ---------- Webhooks ----------
 
-/** Record + apply a verified webhook. Returns false if this event id was already processed. */
+/** Record + apply a verified webhook. Returns duplicate=true if this event id was already processed. */
 export async function applyWebhook(event: WebhookEvent) {
   const update = interpretWebhook(event);
   const mm = update?.match;

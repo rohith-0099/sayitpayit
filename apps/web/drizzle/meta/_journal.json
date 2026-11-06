@@ -8,6 +8,13 @@
       "when": 1793967072884,
       "tag": "0000_huge_mathemanic",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793970547227,
+      "tag": "0001_wandering_red_ghost",
+      "breakpoints": true
     }
   ]
 }
