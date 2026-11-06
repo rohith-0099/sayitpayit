@@ -1,124 +1,119 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { VoiceAgent } from "@/components/agent/VoiceAgent";
 import { listActivity, listOutstanding } from "@/lib/payments/service";
-import { getCurrentUser, listContacts } from "@/lib/users";
-
-// Phase 2 view: proves the app reads contacts + history from Postgres.
-// Phase 4 replaces this with the voice UI.
+import { getCurrentUser } from "@/lib/users";
 
 const fmt = (amount: string | number, currency: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(amount));
 
-const FLAGS: Record<string, string> = { US: "🇺🇸", DE: "🇩🇪", MX: "🇲🇽", JP: "🇯🇵" };
-
-const STATUS_STYLE: Record<string, string> = {
-  completed: "text-emerald-300",
-  sent: "text-amber-300",
-  unclaimed: "text-sky-300",
-  failed: "text-rose-300",
+const STATUS: Record<string, { label: string; className: string }> = {
+  completed: { label: "Done", className: "text-signal" },
+  sent: { label: "On its way", className: "text-paper/80" },
+  unclaimed: { label: "Waiting to be claimed", className: "text-amber" },
+  failed: { label: "Failed", className: "text-coral" },
+  refunded: { label: "Refunded", className: "text-amber" },
+  cancelled: { label: "Cancelled", className: "text-mist" },
+  pending: { label: "Pending", className: "text-mist" },
 };
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-10 px-6 py-14 text-zinc-50">
-      <header className="flex flex-col gap-3">
-        <h1 className="text-4xl font-semibold tracking-tight">SayItPayIt</h1>
-        <p className="text-zinc-400">
-          Pay anyone, anywhere, just by saying it, and the scam stops before the money leaves.
-        </p>
-        <span className="w-fit rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-0.5 text-xs text-emerald-300">
-          PayPal sandbox · Guardian on
-        </span>
-      </header>
-      <Suspense fallback={<p className="text-zinc-500">Loading your money…</p>}>
-        <Overview />
+    <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-12 px-6 py-8 sm:px-10 lg:py-10">
+      <Suspense fallback={<Header />}>
+        <HeaderWithUser />
+      </Suspense>
+      <Suspense fallback={<p className="text-mist">Loading…</p>}>
+        <Agent />
+      </Suspense>
+      <Suspense fallback={null}>
+        <Activity />
       </Suspense>
     </main>
   );
 }
 
-async function Overview() {
+function Header({ children }: { children?: React.ReactNode }) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <p className="font-display text-2xl font-bold tracking-tight">
+        SayItPayIt
+        <span className="ml-3 align-middle text-sm font-normal text-mist">PayPal sandbox</span>
+      </p>
+      {children}
+    </header>
+  );
+}
+
+async function HeaderWithUser() {
   await connection();
   const user = await getCurrentUser();
-  const [contacts, activity, owed] = await Promise.all([
-    listContacts(user.id),
-    listActivity(user.id, 12),
-    listOutstanding(user.id),
-  ]);
+  return (
+    <Header>
+      <Link href="/link" className="text-sm text-mist hover:text-paper">
+        {user.paypalVaultId ? <>Paying from {user.paypalPayerEmail ?? "your PayPal"}</> : "Link your PayPal"}
+      </Link>
+    </Header>
+  );
+}
+
+async function Agent() {
+  await connection();
+  const user = await getCurrentUser();
+  return <VoiceAgent linked={!!user.paypalVaultId} />;
+}
+
+async function Activity() {
+  await connection();
+  const user = await getCurrentUser();
+  const [activity, owed] = await Promise.all([listActivity(user.id, 8), listOutstanding(user.id)]);
+  const owedTotal = owed.reduce((a, o) => a + Number(o.tx.homeAmount ?? o.tx.amount), 0);
 
   return (
-    <>
-      {user.paypalVaultId ? (
-        <p className="text-sm text-zinc-400">
-          Paying from <span className="text-zinc-200">{user.paypalPayerEmail ?? "your PayPal"}</span> ·{" "}
-          <Link href="/link" className="text-zinc-500 hover:text-zinc-300">manage</Link>
-        </p>
-      ) : (
-        <Link
-          href="/link"
-          className="flex items-center justify-between rounded-2xl border border-amber-400/30 bg-amber-400/10 px-5 py-4 hover:bg-amber-400/15"
-        >
-          <span>
-            <span className="font-medium text-amber-200">Link your PayPal to start paying</span>
-            <span className="block text-sm text-zinc-400">One approval, then every payment is just your voice.</span>
-          </span>
-          <span className="text-amber-200">→</span>
-        </Link>
-      )}
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-500">{user.name}&apos;s contacts</h2>
-        <ul className="flex flex-wrap gap-2">
-          {contacts.map((c) => (
-            <li key={c.id} className="rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm">
-              <span className="mr-1">{FLAGS[c.country] ?? "🌍"}</span>
-              <span className="font-medium">{c.nickname}</span>
-              <span className="ml-2 text-zinc-500">
-                {c.currency} · {c.relationship === "business" ? "Goods & Services" : "Friends & Family"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-500">Who owes you</h2>
-        {owed.length === 0 ? (
-          <p className="text-zinc-500">Everyone&apos;s square.</p>
-        ) : (
-          <ul className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-900">
-            {owed.map(({ tx, nickname, splitTitle }) => (
-              <li key={tx.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                <span>
-                  <span className="font-medium">{nickname ?? tx.counterpartyName ?? tx.counterpartyEmail}</span>
-                  <span className="ml-2 text-zinc-500">{splitTitle ?? tx.note}</span>
+    <section className="grid gap-10 border-t border-line pt-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
+      <div>
+        <h2 className="font-display text-xl font-bold">Recent</h2>
+        <ul className="mt-3 divide-y divide-line">
+          {activity.map(({ tx, contact }) => {
+            const st = STATUS[tx.status] ?? STATUS.pending;
+            return (
+              <li key={tx.id} className="flex items-center justify-between gap-4 py-3">
+                <span className="min-w-0 truncate">
+                  {tx.type === "pay" ? "You paid " : "You asked "}
+                  <span className="font-bold">{contact?.nickname ?? tx.counterpartyName}</span>
+                  {tx.note && <span className="text-mist"> for {tx.note.replace(/^Your share of /, "their share of ")}</span>}
                 </span>
-                <span className="tabular-nums text-amber-300">{fmt(tx.amount, tx.currency)}</span>
+                <span className="flex shrink-0 items-baseline gap-4">
+                  <span className={`text-sm ${st.className}`}>{st.label}</span>
+                  <span className="font-display text-lg font-semibold tabular-nums">{fmt(tx.amount, tx.currency)}</span>
+                </span>
               </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-zinc-500">Recent activity</h2>
-        <ul className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-900">
-          {activity.map(({ tx, contact }) => (
-            <li key={tx.id} className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm">
-              <span className="min-w-0 truncate">
-                <span className="text-zinc-500">{tx.type === "pay" ? "Paid" : "Requested from"} </span>
-                <span className="font-medium">{contact?.nickname ?? tx.counterpartyName}</span>
-                <span className="ml-2 text-zinc-500">{tx.note}</span>
-              </span>
-              <span className="flex shrink-0 items-center gap-3">
-                <span className={`text-xs ${STATUS_STYLE[tx.status] ?? "text-zinc-400"}`}>{tx.status}</span>
-                <span className="tabular-nums">{fmt(tx.amount, tx.currency)}</span>
-              </span>
-            </li>
-          ))}
+            );
+          })}
         </ul>
-      </section>
-    </>
+      </div>
+      <div>
+        <h2 className="font-display text-xl font-bold">Waiting on</h2>
+        {owed.length === 0 ? (
+          <p className="mt-3 text-mist">Nobody owes you anything right now.</p>
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-mist">About {fmt(owedTotal, user.homeCurrency)} in open requests</p>
+            <ul className="mt-3 divide-y divide-line">
+              {owed.slice(0, 6).map(({ tx, nickname, splitTitle }) => (
+                <li key={tx.id} className="flex items-center justify-between gap-4 py-3">
+                  <span className="min-w-0 truncate">
+                    <span className="font-bold">{nickname ?? tx.counterpartyName}</span>
+                    {(splitTitle ?? tx.note) && <span className="text-mist"> for {splitTitle ?? tx.note}</span>}
+                  </span>
+                  <span className="font-display text-lg font-semibold tabular-nums text-amber">{fmt(tx.amount, tx.currency)}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </section>
   );
 }

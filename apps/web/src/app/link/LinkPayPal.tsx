@@ -90,17 +90,17 @@ export function LinkPayPal() {
 
   return (
     <div className="flex flex-col items-start gap-4">
-      {phase === "loading" && <p className="text-sm text-zinc-400">Connecting to PayPal…</p>}
+      {phase === "loading" && <p className="text-sm text-mist">Connecting to PayPal…</p>}
       {phase === "ineligible" && (
-        <p className="text-sm text-amber-300">
+        <p className="text-sm text-amber">
           PayPal saving isn&apos;t available for this session. Check that Vault is enabled for the sandbox app.
         </p>
       )}
-      {phase === "linking" && <p className="text-sm text-emerald-300">Saving your PayPal…</p>}
+      {phase === "linking" && <p className="text-sm text-signal">Saving your PayPal…</p>}
       <div className={phase === "ready" || phase === "error" ? "w-72" : "hidden"}>
         <paypal-button type="pay" class="paypal-gold" onClick={start} />
       </div>
-      {error && <p className="max-w-md text-sm text-rose-300">{error}</p>}
+      {error && <p className="max-w-md text-sm text-coral">{error}</p>}
     </div>
   );
 }

@@ -50,6 +50,11 @@ export interface PayInput {
   note?: string;
   command?: string;
   source?: Source;
+  /** Exactly what was read back to the user (home currency, incl. fees). Defaults to the FX value. */
+  chargeTotal?: number;
+  /** Fees included in chargeTotal, for the record. */
+  fee?: number;
+  guardian?: { riskScore: number; decision: "ALLOW" | "ASK_QUESTIONS" | "GUARDIAN_HOLD" | "PASSKEY_REQUIRED" | "BLOCK" };
 }
 
 /**
@@ -79,6 +84,9 @@ export async function executePay(user: User, input: PayInput) {
       ...home,
       note: input.note,
       command: input.command,
+      fee: input.fee?.toFixed(2),
+      riskScore: input.guardian?.riskScore,
+      decision: input.guardian?.decision,
     })
     .returning();
 
@@ -94,7 +102,7 @@ export async function executePay(user: User, input: PayInput) {
   let charge;
   try {
     charge = await chargeVaultedPayPal({
-      amount: Number(home.homeAmount),
+      amount: input.chargeTotal ?? Number(home.homeAmount),
       currency: user.homeCurrency,
       referenceId: tx.id,
       description: `SayItPayIt: ${input.amount.toFixed(2)} ${input.currency} to ${party.counterpartyName ?? party.counterpartyEmail}`,
@@ -166,6 +174,7 @@ export async function syncPendingPayouts(userId: string) {
 // ---------- Request (Invoicing) ----------
 
 export interface RequestInput {
+  guardian?: PayInput["guardian"];
   from: Party;
   amount: number;
   currency: string;
@@ -195,6 +204,8 @@ export async function createRequest(user: User, input: RequestInput) {
       note: input.note,
       command: input.command,
       splitId: input.splitId,
+      riskScore: input.guardian?.riskScore,
+      decision: input.guardian?.decision,
     })
     .returning();
 

@@ -1,26 +1,47 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* SayItPayIt tokens
+   ink     #0E1A2B  base (blue-black, nods to PayPal navy)
+   panel   #16263B  raised surfaces
+   line    #24384F  hairlines
+   paper   #EAF0F6  text
+   mist    #8FA3B8  secondary text
+   signal  #3FD0B6  the agent working / safe to go
+   amber   #F2B544  Guardian: caution
+   coral   #FF6B5E  Guardian: stopped / errors */
+@theme {
+  --color-ink: #0e1a2b;
+  --color-panel: #16263b;
+  --color-line: #24384f;
+  --color-paper: #eaf0f6;
+  --color-mist: #8fa3b8;
+  --color-signal: #3fd0b6;
+  --color-amber: #f2b544;
+  --color-coral: #ff6b5e;
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-lexend), ui-sans-serif, system-ui, sans-serif;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
