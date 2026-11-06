@@ -8,6 +8,8 @@ const Body = z.object({
   text: z.string().trim().max(1000).default(""),
   source: z.enum(["voice", "text"]).default("text"),
   language: z.string().max(8).nullish(),
+  /** From /api/stt when the user is enrolled; the server looks the result up (never trusted from the client). */
+  voiceCheckId: z.string().uuid().nullish(),
   /** data:image/...;base64,... receipt photo */
   image: z
     .string()
@@ -28,7 +30,7 @@ export async function POST(req: Request) {
       runAgent({
         userId: user.id,
         threadId: randomUUID(),
-        input: { text: body.text || "Split this receipt", source: body.source, language: body.language ?? null, image },
+        input: { text: body.text || "Split this receipt", source: body.source, language: body.language ?? null, image, voiceCheckId: body.voiceCheckId ?? null },
       }),
     );
   });

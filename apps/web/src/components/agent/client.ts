@@ -24,14 +24,25 @@ export async function postStream(url: string, body: unknown, onEvent: (e: AgentE
   }
 }
 
-export async function transcribeAudio(blob: Blob, language: string) {
+export interface VoiceCheckSummary {
+  checkId: string;
+  status: string;
+  speakerMatch: boolean | null;
+  speakerScore: number | null;
+  spoofSuspect: boolean | null;
+  phraseMatch: boolean | null;
+}
+
+export async function transcribeAudio(blob: Blob, language: string, opts: { kind?: "command" | "answer"; threadId?: string | null } = {}) {
   const form = new FormData();
   form.append("audio", blob, "speech.webm");
   if (language !== "auto") form.append("language", language);
+  form.append("kind", opts.kind ?? "command");
+  if (opts.threadId) form.append("threadId", opts.threadId);
   const r = await fetch("/api/stt", { method: "POST", body: form });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error ?? "Couldn't transcribe that.");
-  return body as { text: string; language: string | null };
+  return body as { text: string; language: string | null; voice: VoiceCheckSummary | null };
 }
 
 const BCP47: Record<string, string> = { en: "en-US", es: "es-ES", ml: "ml-IN", de: "de-DE", hi: "hi-IN", fr: "fr-FR" };

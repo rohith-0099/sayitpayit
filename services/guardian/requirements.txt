@@ -1,7 +1,13 @@
-# Guardian service (Phase 0 skeleton). ML deps (speechbrain, torch, xgboost, ...) arrive in Phases 5-6.
+# Guardian service. Install CPU torch first (smaller, no CUDA):
+#   uv pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
 fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9
 python-multipart>=0.0.12
 httpx>=0.27
 pytest>=8.3
+# Phase 5: voice gate
+speechbrain>=1.1
+soundfile>=0.12
+av>=14
+numpy>=1.26

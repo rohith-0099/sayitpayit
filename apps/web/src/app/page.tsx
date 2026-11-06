@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { VoiceAgent } from "@/components/agent/VoiceAgent";
 import { listActivity, listOutstanding } from "@/lib/payments/service";
 import { getCurrentUser } from "@/lib/users";
+import { getVoiceProfile } from "@/lib/voice";
 
 const fmt = (amount: string | number, currency: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(amount));
@@ -49,11 +50,17 @@ function Header({ children }: { children?: React.ReactNode }) {
 async function HeaderWithUser() {
   await connection();
   const user = await getCurrentUser();
+  const voice = await getVoiceProfile(user.id);
   return (
     <Header>
-      <Link href="/link" className="text-sm text-mist hover:text-paper">
-        {user.paypalVaultId ? <>Paying from {user.paypalPayerEmail ?? "your PayPal"}</> : "Link your PayPal"}
-      </Link>
+      <nav className="flex items-center gap-6 text-sm">
+        <Link href="/voice" className={voice ? "text-signal hover:brightness-110" : "text-amber hover:brightness-110"}>
+          {voice ? "Voice ID on" : "Set up Voice ID"}
+        </Link>
+        <Link href="/link" className="text-mist hover:text-paper">
+          {user.paypalVaultId ? <>Paying from {user.paypalPayerEmail ?? "your PayPal"}</> : "Link your PayPal"}
+        </Link>
+      </nav>
     </Header>
   );
 }

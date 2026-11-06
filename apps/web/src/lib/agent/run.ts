@@ -20,7 +20,7 @@ export const structuredIntent = (i: Pick<Intent, "kind"> & Partial<Intent>): Int
 export type AgentEvent =
   | { type: "thread"; threadId: string }
   | { type: "update"; node: string; steps: AgentState["steps"] }
-  | { type: "confirm"; threadId: string; readback: Readback; reask: boolean; view: PublicView }
+  | { type: "confirm"; threadId: string; readback: Readback; reask: boolean; note: string | null; view: PublicView }
   | { type: "final"; threadId: string; view: PublicView }
   | { type: "error"; message: string; code?: string };
 
@@ -54,7 +54,7 @@ const view = (s: AgentState): PublicView => ({
  * Run the graph (new thread or resume) and yield UI events as nodes finish.
  * Ends with either `confirm` (paused for the user's yes/no) or `final`.
  */
-export async function* runAgent(opts: { userId: string; threadId: string; input?: AgentInput; answer?: string }): AsyncGenerator<AgentEvent> {
+export async function* runAgent(opts: { userId: string; threadId: string; input?: AgentInput; answer?: string; voiceCheckId?: string | null }): AsyncGenerator<AgentEvent> {
   const agent = await getAgent();
   const config = { configurable: { thread_id: opts.threadId } };
 
@@ -64,7 +64,7 @@ export async function* runAgent(opts: { userId: string; threadId: string; input?
     if (!snap.values?.userId) throw new ApiError(404, "That conversation has expired. Say the payment again.");
     if (snap.values.userId !== opts.userId) throw new ApiError(403, "Not your conversation.");
     if (!snap.next.includes("confirm")) throw new ApiError(409, "Nothing is waiting for a yes or no.");
-    payload = new Command({ resume: { answer: opts.answer } });
+    payload = new Command({ resume: { answer: opts.answer, voiceCheckId: opts.voiceCheckId ?? null } });
   } else {
     payload = { userId: opts.userId, input: opts.input, steps: { listening: { status: "done" }, understood: { status: "active" } } };
     yield { type: "thread", threadId: opts.threadId };
@@ -82,8 +82,8 @@ export async function* runAgent(opts: { userId: string; threadId: string; input?
   const state = snap.values as AgentState;
   const pending = snap.tasks.flatMap((t) => t.interrupts ?? [])[0];
   if (pending) {
-    const v = pending.value as { readback: Readback; reask: boolean };
-    yield { type: "confirm", threadId: opts.threadId, readback: v.readback, reask: v.reask, view: view(state) };
+    const v = pending.value as { readback: Readback; reask: boolean; note: string | null };
+    yield { type: "confirm", threadId: opts.threadId, readback: v.readback, reask: v.reask, note: v.note ?? null, view: view(state) };
   } else {
     yield { type: "final", threadId: opts.threadId, view: view(state) };
   }

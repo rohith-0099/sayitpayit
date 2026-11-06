@@ -31,7 +31,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const [transcript, setTranscript] = useState("");
   const [steps, setSteps] = useState<Steps>({});
   const [view, setView] = useState<PublicView | null>(null);
-  const [readback, setReadback] = useState<{ readback: Readback; reask: boolean } | null>(null);
+  const [readback, setReadback] = useState<{ readback: Readback; reask: boolean; note: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [receipt, setReceipt] = useState<string | null>(null);
@@ -54,9 +54,9 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       else if (e.type === "confirm") {
         setView(e.view);
         setSteps(e.view.steps);
-        setReadback({ readback: e.readback, reask: e.reask });
+        setReadback({ readback: e.readback, reask: e.reask, note: e.note });
         setPhase("confirm");
-        void speak(e.readback.spoken, e.view.language).then(() => {
+        void speak(e.note ?? e.readback.spoken, e.view.language).then(() => {
           // Hands-free: after a spoken command, listen for the yes/no right away.
           if (spokenCommand.current) {
             mode.current = "answer";
@@ -79,7 +79,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   );
 
   const runCommand = useCallback(
-    async (text: string, source: "voice" | "text", language: string | null) => {
+    async (text: string, source: "voice" | "text", language: string | null, voiceCheckId: string | null = null) => {
       setError(null);
       setView(null);
       setReadback(null);
@@ -88,7 +88,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       setSteps({ listening: { status: "done", title: source === "voice" ? "Heard you" : "Typed" }, understood: { status: "active" } });
       setPhase("thinking");
       try {
-        await postStream("/api/agent", { text, source, language, image: receipt }, onEvent);
+        await postStream("/api/agent", { text, source, language, image: receipt, voiceCheckId }, onEvent);
         setReceipt(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -100,12 +100,12 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   );
 
   const answer = useCallback(
-    async (text: string) => {
+    async (text: string, voiceCheckId: string | null = null) => {
       if (!thread.current) return;
       setError(null);
       setPhase("answering");
       try {
-        await postStream(`/api/agent/${thread.current}`, { answer: text }, onEvent);
+        await postStream(`/api/agent/${thread.current}`, { answer: text, voiceCheckId }, onEvent);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Something went wrong.");
         setPhase("confirm");
@@ -119,13 +119,13 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
     setPhase(isAnswer ? "answering" : "transcribing");
     if (!isAnswer) setSteps({ listening: { status: "active", title: "Transcribing…" } });
     try {
-      const t = await transcribeAudio(blob, lang);
+      const t = await transcribeAudio(blob, lang, { kind: isAnswer ? "answer" : "command", threadId: isAnswer ? thread.current : null });
       if (isAnswer) {
-        await answer(t.text || "unclear");
+        await answer(t.text || "unclear", t.voice?.checkId ?? null);
       } else {
         if (!t.text) throw new Error("I didn't catch that. Tap the mic and try again.");
         spokenCommand.current = true;
-        await runCommand(t.text, "voice", t.language);
+        await runCommand(t.text, "voice", t.language, t.voice?.checkId ?? null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't hear that.");
@@ -192,6 +192,12 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
           <ReadbackCard
             readback={readback.readback}
             reask={readback.reask}
+            note={readback.note}
+            onSayPhrase={() => {
+              window.speechSynthesis?.cancel();
+              mode.current = "answer";
+              void recorder.start();
+            }}
             busy={phase === "answering"}
             listening={recorder.recording && phase === "confirm"}
             onYes={() => {

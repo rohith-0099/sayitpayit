@@ -22,6 +22,20 @@
       "when": 1793971343842,
       "tag": "0002_sweet_firebird",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793974116364,
+      "tag": "0003_productive_sunfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793974523571,
+      "tag": "0004_left_the_renegades",
+      "breakpoints": true
     }
   ]
 }

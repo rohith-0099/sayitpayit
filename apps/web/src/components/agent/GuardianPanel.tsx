@@ -57,8 +57,15 @@ export function GuardianPanel({ guardian, voice }: { guardian: PublicView["guard
       <p className="mt-3 text-base leading-snug">{guardian.explanation}</p>
       <ul className="mt-3 flex flex-col gap-1.5 text-sm">
         {voice && (
-          <li className={voice.status === "verified" ? "text-signal" : voice.status === "failed" ? "text-coral" : "text-mist"}>
-            {voice.status === "verified" ? "✓" : voice.status === "failed" ? "✕" : "○"} {voice.detail}
+          <li className={voice.status === "verified" ? "text-signal" : voice.status === "failed" ? "text-coral" : voice.status === "unsure" ? "text-amber" : "text-mist"}>
+            {voice.status === "verified" ? "✓" : voice.status === "failed" ? "✕" : voice.status === "unsure" ? "!" : "○"} {voice.detail}
+            {typeof voice.speakerScore === "number" && <span className="text-mist"> (voice match {Math.round(voice.speakerScore * 100)}/100)</span>}
+          </li>
+        )}
+        {voice?.answer && (
+          <li className={voice.answer.phraseMatch ? "text-signal" : "text-amber"}>
+            {voice.answer.phraseMatch ? "✓" : "!"} Heard &ldquo;{voice.answer.heard}&rdquo;
+            {typeof voice.answer.speakerScore === "number" && <span className="text-mist"> (voice match {Math.round(voice.answer.speakerScore * 100)}/100)</span>}
           </li>
         )}
         {guardian.signals.map((s) => (

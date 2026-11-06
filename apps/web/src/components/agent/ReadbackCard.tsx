@@ -3,18 +3,23 @@ import type { Readback } from "@/lib/agent/graph";
 export function ReadbackCard({
   readback,
   reask,
+  note,
   busy,
   listening,
   onYes,
   onNo,
+  onSayPhrase,
 }: {
   readback: Readback;
   reask: boolean;
+  note: string | null;
   busy: boolean;
   listening: boolean;
   onYes: () => void;
   onNo: () => void;
+  onSayPhrase: () => void;
 }) {
+  const phrase = readback.challenge;
   return (
     <section aria-label="Confirm payment" className="rounded-3xl bg-panel p-6 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.6)] ring-1 ring-line sm:p-8">
       <h2 className="font-display text-3xl font-bold tracking-tight">{readback.title}</h2>
@@ -35,14 +40,32 @@ export function ReadbackCard({
           ))}
         </ul>
       )}
+      {phrase && (
+        <div className="mt-6 rounded-2xl bg-ink/60 p-5 ring-1 ring-signal/40">
+          <p className="text-mist">To send it, say this out loud</p>
+          <p className="mt-2 flex flex-wrap gap-2" aria-label={`Say: ${phrase}`}>
+            {phrase.split(" ").map((w, i) => (
+              <span key={i} className="rounded-xl bg-panel px-4 py-2 font-display text-3xl font-bold tracking-tight text-signal ring-1 ring-line">
+                {w}
+              </span>
+            ))}
+          </p>
+          <p className="mt-3 text-sm text-mist">A new phrase every time, in your voice, so a recording can&apos;t pay.</p>
+        </div>
+      )}
+      {note && (
+        <p role="status" className="mt-4 rounded-xl bg-amber/10 px-4 py-2.5 text-amber ring-1 ring-amber/30">
+          {note}
+        </p>
+      )}
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          onClick={onYes}
-          disabled={busy}
+          onClick={phrase ? onSayPhrase : onYes}
+          disabled={busy || (phrase ? listening : false)}
           className="rounded-full bg-signal px-7 py-3 text-lg font-bold text-ink transition hover:brightness-110 disabled:opacity-50"
         >
-          Yes, send it
+          {phrase ? (listening ? "Listening…" : "Say the phrase") : "Yes, send it"}
         </button>
         <button
           type="button"
@@ -53,7 +76,7 @@ export function ReadbackCard({
           Cancel
         </button>
         <p className="text-sm text-mist" aria-live="polite">
-          {listening ? "Listening for yes or no…" : reask ? "I need a clear yes or no." : "Or just say yes."}
+          {phrase ? "" : listening ? "Listening for yes or no…" : reask ? "I need a clear yes or no." : "Or just say yes."}
         </p>
       </div>
     </section>

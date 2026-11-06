@@ -1,0 +1,1 @@
+ALTER TABLE "voice_checks" ADD COLUMN "speaker_verdict" text;

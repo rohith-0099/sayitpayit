@@ -1,5 +1,5 @@
 import "server-only";
-import { Annotation, END, interrupt, START, StateGraph } from "@langchain/langgraph";
+import { Annotation, END, interrupt, START, StateGraph, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db";
@@ -10,6 +10,7 @@ import { getRate, round2 } from "../fx";
 import { equalShares } from "../payments/logic";
 import { createRequest, createSplit, executePay, type Party } from "../payments/service";
 import { listContacts, resolveRecipient } from "../users";
+import { consumeVoiceCheck, getVoiceProfile, makeChallenge } from "../voice";
 import { classifyAnswer, type Answer } from "./answers";
 import { linkGuardianEvent, runGuardian, type GuardianResult } from "./guardian";
 import { parseIntent, parseReceipt, type Intent, type Receipt } from "./intent";
@@ -51,6 +52,8 @@ export interface Plan {
 
 export interface Readback {
   title: string;
+  /** Payments by an enrolled user: the phrase to say out loud to confirm. */
+  challenge?: string | null;
   lines: { label: string; value: string; emphasis?: boolean }[];
   notes: string[];
   spoken: string;
@@ -62,6 +65,8 @@ export interface AgentInput {
   /** From Whisper, when spoken. */
   language?: string | null;
   image?: { mimeType: string; base64: string } | null;
+  /** Guardian's check of the spoken command (from /api/stt), when the user is enrolled. */
+  voiceCheckId?: string | null;
   /** Structured intent (e.g. /api/pay) skips the LLM but NOT Guardian or Confirm. */
   intent?: Intent | null;
 }
@@ -76,6 +81,18 @@ export interface AgentResult {
 
 const merge = <T,>(a: T, b: T | undefined) => (b === undefined ? a : b);
 
+export interface VoiceState {
+  /** typed = command wasn't spoken; unavailable = Guardian voice service offline */
+  status: "verified" | "unsure" | "not_enrolled" | "failed" | "typed" | "unavailable";
+  enrolled: boolean;
+  detail: string;
+  speakerScore?: number | null;
+  spoofScore?: number | null;
+  spoofSuspect?: boolean | null;
+  /** Result of the spoken challenge at confirm time. */
+  answer?: { speakerScore: number | null; phraseMatch: boolean | null; heard: string } | null;
+}
+
 const State = Annotation.Root({
   userId: Annotation<string>(),
   input: Annotation<AgentInput>(),
@@ -83,7 +100,10 @@ const State = Annotation.Root({
   receipt: Annotation<Receipt | null>({ reducer: merge, default: () => null }),
   intent: Annotation<Intent | null>({ reducer: merge, default: () => null }),
   plan: Annotation<Plan | null>({ reducer: merge, default: () => null }),
-  voice: Annotation<{ status: "verified" | "not_enrolled" | "failed"; detail: string } | null>({ reducer: merge, default: () => null }),
+  voice: Annotation<VoiceState | null>({ reducer: merge, default: () => null }),
+  challenge: Annotation<string | null>({ reducer: merge, default: () => null }),
+  /** Why the last answer wasn't accepted (shown + spoken on re-ask). */
+  confirmNote: Annotation<string | null>({ reducer: merge, default: () => null }),
   guardian: Annotation<GuardianResult | null>({ reducer: merge, default: () => null }),
   quote: Annotation<Quote | null>({ reducer: merge, default: () => null }),
   readback: Annotation<Readback | null>({ reducer: merge, default: () => null }),
@@ -222,12 +242,33 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
   };
 }
 
-/** Voice gate (Phase 5 wires in the Guardian service's speaker + spoof check). */
+/**
+ * Voice gate: Guardian already checked the spoken command (speaker + spoof) in /api/stt;
+ * here we consume that result exactly once. Typed commands get no voice check, so payments
+ * from an enrolled user will need the spoken challenge phrase at confirm time.
+ */
 async function voiceGate(s: AgentState): Promise<Partial<AgentState>> {
-  const [profile] = await db.select({ userId: schema.voiceProfiles.userId }).from(schema.voiceProfiles).where(eq(schema.voiceProfiles.userId, s.userId));
-  const voice = profile
-    ? { status: "verified" as const, detail: "Voice matches" }
-    : { status: "not_enrolled" as const, detail: "Voice ID not set up yet" };
+  const profile = await getVoiceProfile(s.userId);
+  let voice: VoiceState;
+  if (!profile) {
+    voice = { status: "not_enrolled", enrolled: false, detail: "Voice ID not set up yet" };
+  } else if (s.input.source !== "voice") {
+    voice = { status: "typed", enrolled: true, detail: "Typed, so you'll confirm by voice" };
+  } else {
+    const c = await consumeVoiceCheck(s.input.voiceCheckId, s.userId, { kind: "command" });
+    if (!c) voice = { status: "failed", enrolled: true, detail: "No voice sample to check" };
+    else if (c.status === "unavailable") voice = { status: "unavailable", enrolled: true, detail: "Voice check offline" };
+    else if (c.status !== "ok") voice = { status: "failed", enrolled: true, detail: "Too short to check your voice" };
+    else
+      voice = {
+        status: c.speakerVerdict === "match" ? "verified" : c.speakerVerdict === "unsure" ? "unsure" : "failed",
+        enrolled: true,
+        detail: c.speakerVerdict === "match" ? "Your voice matches" : c.speakerVerdict === "unsure" ? "Couldn't fully confirm your voice" : "That doesn't sound like you",
+        speakerScore: c.speakerScore,
+        spoofScore: c.spoofScore,
+        spoofSuspect: c.spoofSuspect,
+      };
+  }
   return { voice, steps: { guardian: { status: "active", title: "Checking", detail: voice.detail } } };
 }
 
@@ -237,7 +278,7 @@ async function guardian(s: AgentState): Promise<Partial<AgentState>> {
   const name = plan.party?.name ?? plan.members!.map((m) => m.party.name).join(", ");
   const email = plan.party && "email" in plan.party ? plan.party.email : plan.party ? ((await loadContact((plan.party as { contactId: string }).contactId))?.paypalEmail ?? "") : "";
   const { rate } = await getRate(plan.currency, user.homeCurrency);
-  const g = await runGuardian({ user, kind: plan.kind, counterpartyEmail: email, counterpartyName: name, homeAmount: round2(plan.amount * rate), command: s.input.text });
+  const g = await runGuardian({ user, kind: plan.kind, counterpartyEmail: email, counterpartyName: name, homeAmount: round2(plan.amount * rate), command: s.input.text, voice: s.voice });
 
   const status: StepStatus = g.decision === "ALLOW" ? "done" : g.decision === "BLOCK" ? "error" : "warn";
   const title = { ALLOW: "Looks safe", ASK_QUESTIONS: "Needs a closer look", GUARDIAN_HOLD: "Held for family approval", PASSKEY_REQUIRED: "Extra check needed", BLOCK: "Stopped" }[g.decision];
@@ -316,22 +357,73 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
     readback.notes.unshift(`Guardian: ${s.guardian.explanation}`);
     readback.spoken = `Before you answer: ${s.guardian.explanation} ${readback.spoken}`;
   }
+  // Money leaving an enrolled user's account needs a fresh random phrase, said in their voice.
+  // A recording can't contain a phrase that didn't exist yet, so this defeats replay.
+  let challenge: string | null = null;
+  if (plan.kind === "pay" && s.voice?.enrolled) {
+    challenge = makeChallenge(L === "es" ? "es" : "en");
+    readback.spoken = readback.spoken.replace(/Shall I send it\?$/, `To send it, say: "${challenge}".`);
+  }
   readback = await localizeCard(readback, L);
-  return { quote, readback, steps: { confirm: { status: "active", title: "Waiting for your yes", detail: readback.title } } };
+  readback.challenge = challenge;
+  return {
+    quote,
+    readback,
+    challenge,
+    steps: { confirm: { status: "active", title: challenge ? "Say the phrase to confirm" : "Waiting for your yes", detail: challenge ? `"${challenge}"` : readback.title } },
+  };
 }
 
-/** Human-in-the-loop: the graph pauses here until the user answers. */
-async function confirm(s: AgentState): Promise<Partial<AgentState>> {
+/**
+ * Human-in-the-loop: the graph pauses here until the user answers.
+ * Without a challenge, a clear yes (typed or spoken) confirms. With a challenge, only a spoken
+ * answer that Guardian matched to the user's voice AND that contains the phrase confirms.
+ */
+async function confirm(s: AgentState, config: LangGraphRunnableConfig): Promise<Partial<AgentState>> {
   const reask = s.answer === "unclear";
-  const resume = interrupt<{ type: "confirm"; readback: Readback; reask: boolean }, { answer: string }>({ type: "confirm", readback: s.readback!, reask });
-  const answer = classifyAnswer(resume?.answer ?? "");
+  const resume = interrupt<
+    { type: "confirm"; readback: Readback; reask: boolean; note: string | null },
+    { answer: string; voiceCheckId?: string | null }
+  >({ type: "confirm", readback: s.readback!, reask, note: s.confirmNote });
   const attempts = s.confirmAttempts + 1;
-  if (answer === "yes") return { answer, confirmAttempts: attempts, steps: { confirm: { status: "done", title: "You said yes" } } };
-  if (answer === "no" || attempts >= 3) {
-    const text = await localize("Okay, I didn't send anything.", s.language);
-    return { answer: "no", confirmAttempts: attempts, outcome: "cancelled", reply: { text }, steps: { confirm: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
+  const said = classifyAnswer(resume?.answer ?? "");
+
+  const cancel = async (english: string, outcome: "cancelled" | "blocked" = "cancelled", extra: Partial<AgentState> = {}): Promise<Partial<AgentState>> => ({
+    answer: "no",
+    confirmAttempts: attempts,
+    outcome,
+    reply: { text: await localize(english, s.language) },
+    steps: { confirm: { status: outcome === "blocked" ? "error" : "skipped", title: outcome === "blocked" ? "Voice didn't match" : "Cancelled" }, done: { status: outcome === "blocked" ? "error" : "skipped", title: "Not sent" } },
+    ...extra,
+  });
+  const again = async (english: string, extra: Partial<AgentState> = {}): Promise<Partial<AgentState>> =>
+    attempts >= 3
+      ? cancel("Okay, I didn't send anything.", "cancelled", extra)
+      : {
+          answer: "unclear",
+          confirmAttempts: attempts,
+          confirmNote: await localize(english, s.language),
+          steps: { confirm: { status: "active", title: s.challenge ? "Say the phrase to confirm" : "Say yes or no", detail: s.challenge ? `"${s.challenge}"` : s.readback!.title } },
+          ...extra,
+        };
+
+  if (said === "no") return cancel("Okay, I didn't send anything.");
+
+  if (!s.challenge) {
+    if (said === "yes") return { answer: "yes", confirmAttempts: attempts, confirmNote: null, steps: { confirm: { status: "done", title: "You said yes" } } };
+    return again("I need a clear yes or no.");
   }
-  return { answer, confirmAttempts: attempts, steps: { confirm: { status: "active", title: "Say yes or no", detail: s.readback!.title } } };
+
+  const threadId = config.configurable?.thread_id as string | undefined;
+  const c = await consumeVoiceCheck(resume?.voiceCheckId, s.userId, { kind: "answer", threadId, maxAgeSec: 120 });
+  if (!c) return again(`Please say the phrase out loud: "${s.challenge}".`);
+  const voice = { ...s.voice!, answer: { speakerScore: c.speakerScore, phraseMatch: c.phraseMatch, heard: c.transcript } };
+  if (c.status === "unavailable") return cancel("Guardian's voice check is offline, so I can't send money right now. I didn't send anything.", "cancelled", { voice });
+  if (c.status !== "ok") return again(`That was too short. Say: "${s.challenge}".`, { voice });
+  if (c.speakerVerdict === "mismatch") return cancel("That voice doesn't match yours, so I stopped. I didn't send anything.", "blocked", { voice });
+  if (c.speakerVerdict !== "match") return again(`I couldn't quite confirm it's you. Say it once more, clearly: "${s.challenge}".`, { voice });
+  if (!c.phraseMatch) return again(`I heard "${c.transcript}". Please say: "${s.challenge}".`, { voice });
+  return { answer: "yes", confirmAttempts: attempts, confirmNote: null, voice, steps: { confirm: { status: "done", title: "Phrase and voice matched" } } };
 }
 
 async function execute(s: AgentState): Promise<Partial<AgentState>> {
@@ -403,7 +495,8 @@ const builder = new StateGraph(State)
   .addEdge("voiceGate", "guardianCheck")
   .addConditionalEdges("guardianCheck", (s) => (s.guardian?.decision === "BLOCK" ? "respond" : "prepare"), ["respond", "prepare"])
   .addEdge("prepare", "confirm")
-  .addConditionalEdges("confirm", (s) => (s.answer === "yes" ? "execute" : s.outcome === "cancelled" ? "respond" : "confirm"), ["execute", "respond", "confirm"])
+  // Any final outcome (cancelled, blocked by a voice mismatch...) ends the flow; only "unclear" asks again.
+  .addConditionalEdges("confirm", (s) => (s.answer === "yes" ? "execute" : s.outcome ? "respond" : "confirm"), ["execute", "respond", "confirm"])
   .addEdge("execute", "respond")
   .addEdge("respond", END);
 

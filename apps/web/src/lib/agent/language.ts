@@ -27,7 +27,7 @@ export async function localizeCard<T extends { title: string; lines: { label: st
   if (!language || language === "en") return card;
   try {
     const out = await generateJson<{ title: string; labels: string[]; notes: string[]; spoken: string }>(
-      [{ text: `Translate this payment confirmation into ${NAMES[language] ?? language}. Keep names, numbers, currency amounts and symbols exactly. Labels stay short. "Friends & Family" and "Goods & Services" are PayPal terms: translate them naturally. Return the same structure.\n\n${JSON.stringify({ title: card.title, labels: card.lines.map((l) => l.label), notes: card.notes, spoken: card.spoken })}` }],
+      [{ text: `Translate this payment confirmation into ${NAMES[language] ?? language}. Keep names, numbers, currency amounts and symbols exactly, and keep any text inside double quotes exactly as written. Labels stay short. "Friends & Family" and "Goods & Services" are PayPal terms: translate them naturally. Return the same structure.\n\n${JSON.stringify({ title: card.title, labels: card.lines.map((l) => l.label), notes: card.notes, spoken: card.spoken })}` }],
       {
         type: "OBJECT",
         properties: { title: { type: "STRING" }, labels: { type: "ARRAY", items: { type: "STRING" } }, notes: { type: "ARRAY", items: { type: "STRING" } }, spoken: { type: "STRING" } },

@@ -29,6 +29,7 @@ export interface GuardianInput {
   counterpartyName: string;
   homeAmount: number;
   command: string;
+  voice?: { status: string; spoofSuspect?: boolean | null } | null;
 }
 
 // Interim scam-language cues (multilingual). Phase 6 replaces these with our fine-tuned classifier.
@@ -77,6 +78,21 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     if (hour >= 0 && hour < 5) signals.push({ id: "odd_hour", label: "Unusual time of night for you", weight: W.oddHour });
   }
 
+  // Voice gate results (Phase 5). A payment in someone else's voice, or one we can't check
+  // because the voice service is down, never goes out (fail closed).
+  const v = input.voice;
+  let forceBlock = false;
+  if (input.kind === "pay" && v?.status === "failed") {
+    signals.push({ id: "voice_mismatch", label: "The voice doesn't match yours", weight: 0.9 });
+    forceBlock = true;
+  }
+  if (input.kind === "pay" && v?.status === "unavailable") {
+    signals.push({ id: "voice_unavailable", label: "Couldn't check your voice (Guardian offline)", weight: 0.5 });
+    forceBlock = true;
+  }
+  if (input.kind === "pay" && v?.status === "unsure") signals.push({ id: "voice_unsure", label: "Couldn't fully confirm your voice", weight: 0.3 });
+  if (v?.spoofSuspect) signals.push({ id: "synthetic_voice", label: "The voice sounds recorded or synthetic", weight: 0.25 });
+
   const cues = SCAM_CUES.filter((c) => c.re.test(input.command));
   for (const c of cues) signals.push({ id: c.id, label: c.label, weight: W.scamCue });
   const scamScore = Math.min(1, cues.length * 0.35);
@@ -88,6 +104,7 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     : cues.length === 1 || riskScore >= 0.45 ? "ASK_QUESTIONS"
     : "ALLOW";
   if (decision === "ALLOW" && input.kind === "pay" && input.homeAmount >= 1000) decision = "PASSKEY_REQUIRED";
+  if (forceBlock) decision = "BLOCK";
 
   const explanation =
     signals.length === 0
@@ -96,7 +113,9 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
         : `Asking for money doesn't move any of yours, so this is low risk.`
       : decision === "ALLOW"
         ? `Looks OK. Noted: ${signals.map((s) => s.label.toLowerCase()).join("; ")}.`
-        : `${decision === "BLOCK" ? "Stopped" : "Flagged"}: ${signals.map((s) => s.label.toLowerCase()).join("; ")}.`;
+        : decision === "BLOCK"
+          ? `${signals.map((s) => s.label).join(". ")}.`
+          : `Flagged: ${signals.map((s) => s.label.toLowerCase()).join("; ")}.`;
 
   const [event] = await db
     .insert(schema.guardianEvents)

@@ -115,6 +115,37 @@ export const voiceProfiles = pgTable("voice_profiles", {
   enrolledAt: createdAt(),
 });
 
+/**
+ * One Guardian voice check of one recording (a spoken command, or the challenge answer).
+ * The browser only ever holds the id; the graph reads the result from here and consumes it once.
+ */
+export const voiceChecks = pgTable(
+  "voice_checks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["command", "answer"] }).notNull(),
+    /** Agent conversation this answer belongs to (answers only). */
+    threadId: text("thread_id"),
+    transcript: text("transcript").notNull(),
+    /** "ok" | "too_short" | "unavailable" (Guardian down) */
+    status: text("status").notNull(),
+    speakerScore: real("speaker_score"),
+    speakerMatch: boolean("speaker_match"),
+    /** "match" | "unsure" | "mismatch" (Guardian's three-zone speaker decision) */
+    speakerVerdict: text("speaker_verdict"),
+    spoofScore: real("spoof_score"),
+    spoofSuspect: boolean("spoof_suspect"),
+    phraseExpected: text("phrase_expected"),
+    phraseMatch: boolean("phrase_match"),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("voice_checks_user_idx").on(t.userId, t.createdAt)],
+);
+
 // ---------- Money ----------
 
 export const splits = pgTable("splits", {
@@ -259,3 +290,4 @@ export type User = typeof users.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type GuardianEvent = typeof guardianEvents.$inferSelect;
+export type VoiceCheck = typeof voiceChecks.$inferSelect;
