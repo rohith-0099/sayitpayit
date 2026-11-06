@@ -1,16 +1,12 @@
 import "server-only";
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
+import { ApiError } from "./errors";
 import { PayPalError } from "./paypal";
 import type { Party } from "./payments/service";
 import { resolveRecipient } from "./users";
 
-/** An error with an HTTP status and optional details, safe to show the client. */
-export class ApiError extends Error {
-  constructor(public status: number, message: string, public details?: unknown) {
-    super(message);
-  }
-}
+export { ApiError };
 
 /** Wrap a route body: zod → 400, PayPal → 502 with PayPal's reason, anything else → 500. */
 export async function handle(fn: () => Promise<unknown>): Promise<Response> {

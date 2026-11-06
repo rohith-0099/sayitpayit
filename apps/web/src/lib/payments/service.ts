@@ -3,12 +3,15 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Contact, User } from "../db/schema";
 import { getRate, round2 } from "../fx";
+import { ApiError } from "../errors";
 import {
+  chargeVaultedPayPal,
   createInvoice,
   createPayout,
   generateInvoiceQR,
   getPayout,
   PayPalError,
+  refundCapture,
   sendInvoice,
   type WebhookEvent,
 } from "../paypal";
@@ -50,11 +53,20 @@ export interface PayInput {
 }
 
 /**
- * Execute a payment. Callers MUST have obtained explicit user confirmation first;
- * from Phase 4 only the agent graph's Confirm node may reach this.
+ * Execute a payment: charge the user's linked PayPal (Vault, no popup), then pay the
+ * recipient with Payouts. If the payout fails after the charge, the charge is refunded.
+ * Callers MUST have obtained explicit user confirmation first; from Phase 4 only the
+ * agent graph's Confirm node may reach this.
+ *
+ * Sandbox demo architecture: funds pass through the merchant account between the two
+ * steps. Doing this in production would need money-transmission licensing.
  */
 export async function executePay(user: User, input: PayInput) {
+  if (!user.paypalVaultId) {
+    throw new ApiError(409, "Link your PayPal first: open /link and approve SayItPayIt once.", { code: "PAYPAL_NOT_LINKED" });
+  }
   const party = partyFields(input.to);
+  const home = await homeValue(user, input.amount, input.currency);
   const [tx] = await db
     .insert(transactions)
     .values({
@@ -64,12 +76,39 @@ export async function executePay(user: User, input: PayInput) {
       source: input.source ?? "api",
       amount: input.amount.toFixed(2),
       currency: input.currency,
-      ...(await homeValue(user, input.amount, input.currency)),
+      ...home,
       note: input.note,
       command: input.command,
     })
     .returning();
 
+  const fail = async (e: unknown, extra: Partial<typeof transactions.$inferInsert> = {}) => {
+    await db
+      .update(transactions)
+      .set({ status: "failed", error: errMsg(e), updatedAt: new Date(), ...extra })
+      .where(eq(transactions.id, tx.id));
+    throw e;
+  };
+
+  // 1. Charge the user's vaulted PayPal in their home currency.
+  let charge;
+  try {
+    charge = await chargeVaultedPayPal({
+      amount: Number(home.homeAmount),
+      currency: user.homeCurrency,
+      referenceId: tx.id,
+      description: `SayItPayIt: ${input.amount.toFixed(2)} ${input.currency} to ${party.counterpartyName ?? party.counterpartyEmail}`,
+      vaultId: user.paypalVaultId,
+    });
+  } catch (e) {
+    return fail(e);
+  }
+  await db
+    .update(transactions)
+    .set({ paypalOrderId: charge.orderId, paypalCaptureId: charge.captureId, updatedAt: new Date() })
+    .where(eq(transactions.id, tx.id));
+
+  // 2. Pay the recipient in their currency.
   try {
     const batch = await createPayout({
       receiver: party.counterpartyEmail,
@@ -85,8 +124,14 @@ export async function executePay(user: User, input: PayInput) {
       .returning();
     return updated;
   } catch (e) {
-    await db.update(transactions).set({ status: "failed", error: errMsg(e), updatedAt: new Date() }).where(eq(transactions.id, tx.id));
-    throw e;
+    // Never keep the user's money for a payment that didn't go out.
+    try {
+      await refundCapture(charge.captureId, "SayItPayIt: the payment couldn't be delivered, so we refunded you.");
+      return fail(e, { status: "refunded" });
+    } catch (refundErr) {
+      console.error("[pay] REFUND FAILED after payout failure", tx.id, refundErr);
+      return fail(new Error(`${errMsg(e)}; refund also failed: ${errMsg(refundErr)}`));
+    }
   }
 }
 

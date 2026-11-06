@@ -17,6 +17,7 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@paypal/paypal-js": "^11.3.0",
     "drizzle-orm": "^0.45.4",
     "next": "16.4.5",
     "postgres": "^4.1.0",

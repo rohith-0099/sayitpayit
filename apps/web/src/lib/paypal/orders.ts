@@ -57,3 +57,32 @@ export function captureOrder(orderId: string): Promise<Order> {
 export function getOrder(orderId: string): Promise<Order> {
   return paypalFetch<Order>(`/v2/checkout/orders/${encodeURIComponent(orderId)}`);
 }
+
+export interface Charge {
+  orderId: string;
+  captureId: string;
+  amount: { currency_code: string; value: string };
+}
+
+/**
+ * Charge a vaulted PayPal wallet with no buyer interaction. With a vault_id PayPal
+ * usually completes the order in one call; if it comes back APPROVED we capture it.
+ */
+export async function chargeVaultedPayPal(input: Omit<CreateOrderInput, "vaultId"> & { vaultId: string }): Promise<Charge> {
+  let order = await createOrder(input);
+  if (order.status === "APPROVED" || order.status === "CREATED") order = await captureOrder(order.id);
+  const capture = order.purchase_units?.[0]?.payments?.captures?.[0];
+  if (order.status !== "COMPLETED" || !capture || capture.status !== "COMPLETED") {
+    throw new Error(`Charge not completed (order ${order.id} ${order.status}, capture ${capture?.status ?? "none"})`);
+  }
+  return { orderId: order.id, captureId: capture.id, amount: capture.amount };
+}
+
+/** Full refund of a capture (used when the payout after a charge fails). */
+export function refundCapture(captureId: string, note: string) {
+  return paypalFetch<{ id: string; status: string }>(`/v2/payments/captures/${encodeURIComponent(captureId)}/refund`, {
+    method: "POST",
+    idempotencyKey: `refund-${captureId}`,
+    body: { note_to_payer: note.slice(0, 255) },
+  });
+}

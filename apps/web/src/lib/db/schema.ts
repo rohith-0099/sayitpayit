@@ -52,9 +52,13 @@ export const users = pgTable("users", {
   language: text("language").notNull().default("en"),
   country: text("country").notNull().default("US"),
   timezone: text("timezone").notNull().default("America/New_York"),
-  /** Vault v3 payment token for the linked PayPal wallet (Phase 3). */
+  /** Vault v3 payment token for the linked PayPal wallet. Never sent to the browser. */
   paypalVaultId: text("paypal_vault_id"),
+  paypalCustomerId: text("paypal_customer_id"),
   paypalPayerEmail: text("paypal_payer_email"),
+  paypalLinkedAt: timestamp("paypal_linked_at", { withTimezone: true }),
+  /** The setup token we issued for an in-progress link; only this one may be converted. */
+  paypalPendingSetupToken: text("paypal_pending_setup_token"),
   createdAt: createdAt(),
 });
 
@@ -158,7 +162,9 @@ export const transactions = pgTable(
     paypalInvoiceId: text("paypal_invoice_id"),
     paypalInvoiceUrl: text("paypal_invoice_url"),
     paypalTransactionId: text("paypal_transaction_id"),
+    /** Orders v2 charge of the user's vaulted PayPal that funds a payout. */
     paypalOrderId: text("paypal_order_id"),
+    paypalCaptureId: text("paypal_capture_id"),
     fee: money("fee"),
     error: text("error"),
     createdAt: createdAt(),

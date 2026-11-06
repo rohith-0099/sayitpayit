@@ -115,3 +115,31 @@ export function money(amount: number, currency: string): Money {
   const c = currency.toUpperCase();
   return { currency_code: c, value: amount.toFixed(ZERO_DECIMAL.has(c) ? 0 : 2) };
 }
+
+/**
+ * Browser-safe client token for JS SDK v6 (15-minute lifetime).
+ * `domain` binds it to a public hostname (e.g. the tunnel or Render host). PayPal rejects
+ * localhost/IPs, so local dev omits the binding.
+ */
+export async function getBrowserClientToken(domain?: string): Promise<{ clientToken: string; expiresIn: number }> {
+  const auth = Buffer.from(`${requireEnv("PAYPAL_CLIENT_ID")}:${requireEnv("PAYPAL_SECRET")}`).toString("base64");
+  const params = new URLSearchParams({ grant_type: "client_credentials", response_type: "client_token" });
+  if (domain && isPublicHostname(domain)) params.append("domains[]", domain);
+  const r = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+    cache: "no-store",
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new PayPalError(r.status, body, r.headers.get("paypal-debug-id") ?? undefined);
+  return { clientToken: body.access_token, expiresIn: body.expires_in };
+}
+
+/** "abc.trycloudflare.com" → true; "localhost", "127.0.0.1", "[::1]" → false. */
+export function isPublicHostname(host: string): boolean {
+  const h = host.replace(/:\d+$/, "").toLowerCase();
+  if (!h.includes(".") || h === "localhost" || h.endsWith(".localhost")) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(":") || h.startsWith("[")) return false;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h);
+}

@@ -15,6 +15,13 @@
       "when": 1793970547227,
       "tag": "0001_wandering_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793971343842,
+      "tag": "0002_sweet_firebird",
+      "breakpoints": true
     }
   ]
 }
