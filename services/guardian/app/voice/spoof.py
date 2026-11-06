@@ -10,7 +10,9 @@ import torch
 
 HERE = Path(__file__).resolve().parent / "aasist"
 NB_SAMP = 64_600  # ~4 s at 16 kHz, the model's training input length
-THRESHOLD = float(os.environ.get("SPOOF_THRESHOLD", "0.5"))
+# AASIST-L (trained on ASVspoof 2019) misfires on real microphones: a live user scored as
+# "recorded" in testing, and a real VoxCeleb voice scored 0.70. Only very high scores count.
+THRESHOLD = float(os.environ.get("SPOOF_THRESHOLD", "0.9"))
 
 
 @lru_cache(maxsize=1)

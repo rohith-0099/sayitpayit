@@ -15,6 +15,7 @@ import { classifyAnswer, type Answer } from "./answers";
 import { linkGuardianEvent, runGuardian, type GuardianResult } from "./guardian";
 import { parseIntent, parseReceipt, type Intent, type Receipt } from "./intent";
 import { localize, localizeCard } from "./language";
+import { resolveLanguage } from "./lang";
 
 // ---------------------------------------------------------------------------
 // Flow (fixed order; Guardian and Confirm can never be skipped):
@@ -45,7 +46,9 @@ export interface Plan {
   amount: number; // pay/request: amount; split: total
   currency: string;
   note: string | null;
-  title?: string; // split title
+  /** Purpose in English: invoices, invoice emails and the invoice page are always English. */
+  noteEn: string | null;
+  title?: string; // split title (English, used on invoices)
   recipientCountry?: string;
   category?: "friends_family" | "business";
 }
@@ -141,7 +144,7 @@ async function toParty(ref: PartyRef): Promise<Party> {
   return { email: ref.email, name: ref.name };
 }
 
-const LOCALES: Record<string, string> = { en: "en-US", es: "es-ES", de: "de-DE", ml: "ml-IN", hi: "hi-IN", fr: "fr-FR", ja: "ja-JP" };
+const LOCALES: Record<string, string> = { en: "en-US", es: "es-ES", de: "de-DE", ml: "ml-IN", ta: "ta-IN", hi: "hi-IN", fr: "fr-FR", ja: "ja-JP" };
 export const money = (amount: number, currency: string, lang = "en") =>
   new Intl.NumberFormat(LOCALES[lang] ?? "en-US", { style: "currency", currency }).format(amount);
 
@@ -168,7 +171,8 @@ async function understand(s: AgentState): Promise<Partial<AgentState>> {
   const intent =
     s.input.intent ??
     (await parseIntent(s.input.text, { contacts: await listContacts(user.id), homeCurrency: user.homeCurrency, receipt }));
-  const language = s.input.language && s.input.source === "voice" ? s.input.language : intent.language || "en";
+  // Reply in the language of the transcript text (Whisper's audio guess is only a tiebreaker).
+  const language = resolveLanguage({ text: s.input.text, llm: intent.language, whisper: s.input.source === "voice" ? s.input.language : null });
 
   if (intent.kind === "unknown") {
     const text = await localize(`I can send money, ask for money, or split a bill. Try: "Pay Maria 50 euros for the logo."`, language);
@@ -218,9 +222,9 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
     const includeMe = intent.includeMe !== false;
     const shares = equalShares(total, refs.length + (includeMe ? 1 : 0));
     const memberShares = includeMe ? shares.slice(1) : shares;
-    const title = intent.note ?? (s.receipt?.merchant ? titleCase(s.receipt.merchant) : "Shared bill");
+    const title = intent.noteEn ?? (s.receipt?.merchant ? titleCase(s.receipt.merchant) : "Shared bill");
     return {
-      plan: { kind: "split", amount: total, currency, note: intent.note, title, members: refs.map((party, i) => ({ party, share: memberShares[i] })), myShare: includeMe ? shares[0] : 0 },
+      plan: { kind: "split", amount: total, currency, note: intent.note, noteEn: intent.noteEn, title, members: refs.map((party, i) => ({ party, share: memberShares[i] })), myShare: includeMe ? shares[0] : 0 },
     };
   }
 
@@ -235,6 +239,7 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
       amount: intent.amount!,
       currency,
       note: intent.note,
+      noteEn: intent.noteEn ?? intent.note,
       recipientCountry: r.contact?.country ?? user.country,
       category: r.contact?.relationship ?? "friends_family",
     },
@@ -253,7 +258,7 @@ async function voiceGate(s: AgentState): Promise<Partial<AgentState>> {
   if (!profile) {
     voice = { status: "not_enrolled", enrolled: false, detail: "Voice ID not set up yet" };
   } else if (s.input.source !== "voice") {
-    voice = { status: "typed", enrolled: true, detail: "Typed, so you'll confirm by voice" };
+    voice = { status: "typed", enrolled: true, detail: s.plan?.kind === "pay" ? "Typed, so you'll confirm by voice" : "Typed (no money leaves your account)" };
   } else {
     const c = await consumeVoiceCheck(s.input.voiceCheckId, s.userId, { kind: "command" });
     if (!c) voice = { status: "failed", enrolled: true, detail: "No voice sample to check" };
@@ -334,9 +339,8 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
       lines: [
         { label: `${name} pays you`, value: amt, emphasis: true },
         ...(plan.note ? [{ label: "For", value: plan.note }] : []),
-        { label: "How", value: "PayPal invoice with a QR code" },
       ],
-      notes: ["Nothing leaves your account. They pay the invoice with PayPal or a card."],
+      notes: ["I'll send a PayPal invoice with a QR code (in English). Nothing leaves your account; they pay with PayPal or a card."],
       spoken: `Asking ${name} for ${amt}${plan.note ? ` for ${plan.note}` : ""}. I'll send a PayPal invoice with a QR code. Shall I send it?`,
     };
   } else {
@@ -453,7 +457,7 @@ async function execute(s: AgentState): Promise<Partial<AgentState>> {
       result = { kind: "pay", transactionIds: [tx.id], status: tx.status };
       english = `Done. ${plan.party!.name} is getting ${money(plan.amount, plan.currency, L)}.`;
     } else if (plan.kind === "request") {
-      const r = await createRequest(user, { from: await toParty(plan.party!), amount: plan.amount, currency: plan.currency, note: plan.note ?? undefined, item: plan.note ?? undefined, command: s.input.text, source: s.input.source, guardian: g });
+      const r = await createRequest(user, { from: await toParty(plan.party!), amount: plan.amount, currency: plan.currency, note: plan.noteEn ?? undefined, item: plan.noteEn ?? undefined, command: s.input.text, source: s.input.source, guardian: g });
       result = { kind: "request", transactionIds: [r.transaction.id], status: r.transaction.status, payUrl: r.invoice.payerViewUrl, qr: r.invoice.qrDataUrl };
       english = `Sent. ${plan.party!.name} has a PayPal invoice for ${money(plan.amount, plan.currency, L)}.`;
     } else {
@@ -466,7 +470,8 @@ async function execute(s: AgentState): Promise<Partial<AgentState>> {
     }
     if (s.guardian.eventId && result.transactionIds[0]) await linkGuardianEvent(s.guardian.eventId, result.transactionIds[0]);
     const title = { pay: "Paid", request: "Requested", split: "Invoices sent" }[plan.kind];
-    return { result, outcome: "done", reply: { text: await localize(english, L) }, steps: { done: { status: "done", title, detail: english } } };
+    const text = await localize(english, L);
+    return { result, outcome: "done", reply: { text }, steps: { done: { status: "done", title, detail: text } } };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const text = await localize(`That didn't go through: ${msg}`, L);

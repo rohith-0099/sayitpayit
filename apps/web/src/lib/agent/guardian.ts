@@ -91,7 +91,8 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     forceBlock = true;
   }
   if (input.kind === "pay" && v?.status === "unsure") signals.push({ id: "voice_unsure", label: "Couldn't fully confirm your voice", weight: 0.3 });
-  if (v?.spoofSuspect) signals.push({ id: "synthetic_voice", label: "The voice sounds recorded or synthetic", weight: 0.25 });
+  // Weak signal (AASIST-L false-positives on live mics); only raised for very high scores (Guardian threshold 0.9).
+  if (v?.spoofSuspect) signals.push({ id: "synthetic_voice", label: "The voice may be a recording or AI voice", weight: 0.1 });
 
   const cues = SCAM_CUES.filter((c) => c.re.test(input.command));
   for (const c of cues) signals.push({ id: c.id, label: c.label, weight: W.scamCue });

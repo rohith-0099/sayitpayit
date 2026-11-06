@@ -1,7 +1,7 @@
 import "server-only";
 import { generateJson, generateText } from "../ai/gemini";
 
-const NAMES: Record<string, string> = { en: "English", es: "Spanish", ml: "Malayalam", de: "German", fr: "French", hi: "Hindi", pt: "Portuguese", ja: "Japanese" };
+const NAMES: Record<string, string> = { en: "English", es: "Spanish", ml: "Malayalam", ta: "Tamil", de: "German", fr: "French", hi: "Hindi", pt: "Portuguese", ja: "Japanese" };
 
 /**
  * Say an English UI/voice line in the user's language. English passes through instantly;

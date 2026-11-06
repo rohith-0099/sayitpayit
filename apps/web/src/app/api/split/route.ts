@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     return startStructured(user.id, {
       text: `Split ${b.title} ${b.total}${b.currency ? ` ${b.currency}` : ""} with ${b.members.join(", ")}`,
       source: "api",
-      intent: structuredIntent({ kind: "split", members: b.members, amount: b.total, currency: b.currency ?? null, note: b.title, includeMe: b.includeMe ?? true }),
+      intent: structuredIntent({ kind: "split", members: b.members, amount: b.total, currency: b.currency ?? null, note: b.title, noteEn: b.title, includeMe: b.includeMe ?? true }),
     });
   });
 }

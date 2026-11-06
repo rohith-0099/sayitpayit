@@ -31,3 +31,9 @@ def test_shared_key_enforced_when_set(monkeypatch):
     monkeypatch.setenv("GUARDIAN_API_KEY", "s3cret")
     with TestClient(app) as c:
         assert c.post("/voice/verify").status_code == 401
+
+
+def test_tts_rejects_unsupported_language_and_empty_text():
+    with TestClient(app) as c:
+        assert c.post("/tts", json={"text": "hola", "lang": "ml"}).status_code == 422
+        assert c.post("/tts", json={"text": "", "lang": "en"}).status_code == 422

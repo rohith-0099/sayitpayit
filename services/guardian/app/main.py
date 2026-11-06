@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -9,6 +10,10 @@ from typing import Annotated
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from . import tts
 
 from .voice import challenge, speaker, spoof
 from .voice.audio import SR, AudioError, load_audio, speech_seconds, trim_silence
@@ -16,7 +21,7 @@ from .voice.audio import SR, AudioError, load_audio, speech_seconds, trim_silenc
 VERSION = "0.2.0"
 MIN_SPEECH_SEC = 0.8
 MAX_UPLOAD = 5 * 1024 * 1024
-models_ready = {"speaker": False, "spoof": False}
+models_ready = {"speaker": False, "spoof": False, "tts": False}
 
 
 @asynccontextmanager
@@ -27,6 +32,15 @@ async def lifespan(_: FastAPI):
         models_ready["speaker"] = True
         spoof.load()
         models_ready["spoof"] = True
+
+        # Kokoro's English pipeline takes a while the first time (downloads models); warm it in the
+        # background so /health and the voice gate are available immediately.
+        def _warm_tts():
+            tts.warm("en")
+            tts.warm("es")  # the demo's second language
+            models_ready["tts"] = True
+
+        threading.Thread(target=_warm_tts, daemon=True).start()
     yield
 
 
@@ -115,3 +129,18 @@ async def verify(
         "phrase": phrase,
         "ms": {"speaker": round((t1 - t0) * 1000), "spoof": round((t2 - t1) * 1000)},
     }
+
+
+class TtsRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
+    lang: str = Field(default="en", pattern=r"^[a-z]{2}$")
+    speed: float = Field(default=1.0, ge=0.7, le=1.3)
+
+
+@app.post("/tts", dependencies=[Depends(require_key)], responses={200: {"content": {"audio/wav": {}}}})
+def text_to_speech(req: TtsRequest) -> Response:
+    """Kokoro TTS. 422 for languages Kokoro doesn't speak (the web app falls back to Gemini TTS)."""
+    if req.lang not in tts.SUPPORTED:
+        raise HTTPException(422, f"Kokoro doesn't support '{req.lang}'")
+    wav = tts.synthesize(req.text.strip(), req.lang, req.speed)
+    return Response(wav, media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})

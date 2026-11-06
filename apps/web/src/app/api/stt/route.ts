@@ -1,5 +1,6 @@
 import { transcribe } from "@/lib/ai/groq";
 import { getAgent } from "@/lib/agent/graph";
+import { AUTO_DETECT_OK } from "@/lib/agent/lang";
 import { ApiError, handle } from "@/lib/api";
 import { getCurrentUser, listContacts } from "@/lib/users";
 import { recordVoiceCheck } from "@/lib/voice";
@@ -33,7 +34,13 @@ export async function POST(req: Request) {
     // Contact names in the prompt help Whisper spell them. The challenge phrase is deliberately NOT
     // included: Whisper can echo its prompt on unclear audio, which would let noise "pass" the challenge.
     const prompt = `SayItPayIt payment. Contacts: ${contacts.map((c) => c.nickname).join(", ")}.`;
-    const t = await transcribe(audio, { prompt, language: /^[a-z]{2}$/.test(lang) ? lang : undefined });
+    const hint = /^[a-z]{2}$/.test(lang) ? lang : undefined;
+    let t = await transcribe(audio, { prompt, language: hint });
+    // "Any language": Whisper's audio guess is unreliable outside English/Spanish (it has heard
+    // accented English as Tamil). Re-transcribe as English; picking a language in the UI skips this.
+    if (!hint && (!t.language || !AUTO_DETECT_OK.has(t.language))) {
+      t = { ...(await transcribe(audio, { prompt, language: "en" })), language: "en" };
+    }
 
     const check = await recordVoiceCheck(user, audio, t.text, { kind, threadId, expectedPhrase });
     return {

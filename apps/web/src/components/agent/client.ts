@@ -45,22 +45,80 @@ export async function transcribeAudio(blob: Blob, language: string, opts: { kind
   return body as { text: string; language: string | null; voice: VoiceCheckSummary | null };
 }
 
-const BCP47: Record<string, string> = { en: "en-US", es: "es-ES", ml: "ml-IN", de: "de-DE", hi: "hi-IN", fr: "fr-FR" };
+const BCP47: Record<string, string> = { en: "en-US", es: "es-ES", ml: "ml-IN", ta: "ta-IN", de: "de-DE", hi: "hi-IN", fr: "fr-FR" };
 
-/** Speak with the browser's built-in TTS in the reply's language. Resolves when done. */
-export function speak(text: string, lang: string): Promise<void> {
+/** Split into sentences so the first one can start playing while the rest are generated. */
+export function sentences(text: string): string[] {
+  return (text.match(/[^.!?¿¡।]+[.!?।]+["”»)]*|[^.!?।]+$/gu) ?? [text]).map((s) => s.trim()).filter(Boolean);
+}
+
+let current: { stop: () => void } | null = null;
+
+/** Stop whatever the agent is saying (e.g. the user tapped the mic). */
+export function stopSpeaking() {
+  current?.stop();
+  current = null;
+  if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+}
+
+function browserSpeak(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window) || !text) return resolve();
-    window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = BCP47[lang] ?? lang;
     const voice = window.speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith(u.lang.slice(0, 2).toLowerCase()));
     if (voice) u.voice = voice;
-    u.rate = 1.02;
     u.onend = () => resolve();
     u.onerror = () => resolve();
     window.speechSynthesis.speak(u);
   });
+}
+
+async function fetchSentence(text: string, lang: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, lang }), signal });
+    return r.ok ? URL.createObjectURL(await r.blob()) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Speak with the agent's voice (Kokoro / Gemini TTS via /api/tts), sentence by sentence:
+ * sentence N plays while N+1 is fetched. Falls back to the browser voice if TTS is unavailable.
+ * Resolves when done (or when interrupted by stopSpeaking()).
+ */
+export async function speak(text: string, lang: string): Promise<void> {
+  stopSpeaking();
+  if (typeof window === "undefined" || !text) return;
+  const parts = sentences(text);
+  const ctrl = new AbortController();
+  let stopped = false;
+  let audio: HTMLAudioElement | null = null;
+  current = {
+    stop: () => {
+      stopped = true;
+      ctrl.abort();
+      audio?.pause();
+    },
+  };
+  let next = fetchSentence(parts[0], lang, ctrl.signal);
+  for (let i = 0; i < parts.length && !stopped; i++) {
+    const url = await next;
+    if (i + 1 < parts.length) next = fetchSentence(parts[i + 1], lang, ctrl.signal);
+    if (stopped) break;
+    if (!url) {
+      await browserSpeak(parts.slice(i).join(" "), lang);
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      audio = new Audio(url);
+      audio.onended = audio.onerror = audio.onpause = () => resolve();
+      audio.play().catch(() => resolve());
+    });
+    URL.revokeObjectURL(url);
+  }
+  if (current && !stopped) current = null;
 }
 
 /** Downscale a photo to ≤1600px JPEG data URL (keeps Gemini vision fast). */

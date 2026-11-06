@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Readback, StepId } from "@/lib/agent/graph";
 import type { AgentEvent, PublicView } from "@/lib/agent/run";
-import { fileToDataUrl, postStream, speak, transcribeAudio } from "./client";
+import { fileToDataUrl, postStream, speak, stopSpeaking, transcribeAudio } from "./client";
 import { GuardianPanel } from "./GuardianPanel";
 import { ReadbackCard } from "./ReadbackCard";
 import { Stepper, type UiStep } from "./Stepper";
@@ -142,7 +142,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const micBusy = phase === "transcribing" || phase === "thinking" || phase === "answering";
   const toggleMic = () => {
     if (recorder.recording) return recorder.stop();
-    window.speechSynthesis?.cancel();
+    stopSpeaking();
     mode.current = phase === "confirm" ? "answer" : "command";
     if (mode.current === "command") {
       setTranscript("");
@@ -194,7 +194,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
             reask={readback.reask}
             note={readback.note}
             onSayPhrase={() => {
-              window.speechSynthesis?.cancel();
+              stopSpeaking();
               mode.current = "answer";
               void recorder.start();
             }}

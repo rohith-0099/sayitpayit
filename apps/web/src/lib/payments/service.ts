@@ -188,7 +188,8 @@ export interface RequestInput {
 
 export async function createRequest(user: User, input: RequestInput) {
   const party = partyFields(input.from);
-  const language = "contact" in input.from ? input.from.contact.language : "en";
+  // Invoices, invoice emails and our invoice page are always in English.
+  const language = "en";
   const itemName = input.item ?? input.note ?? "Payment request";
 
   const [tx] = await db

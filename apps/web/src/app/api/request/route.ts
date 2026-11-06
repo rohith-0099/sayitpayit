@@ -21,7 +21,7 @@ export async function POST(req: Request) {
     return startStructured(user.id, {
       text: `Ask ${b.from} for ${b.amount}${b.currency ? ` ${b.currency}` : ""}${b.note ? ` for ${b.note}` : ""}`,
       source: "api",
-      intent: structuredIntent({ kind: "request", recipient: b.from, amount: b.amount, currency: b.currency ?? null, note: b.note ?? null }),
+      intent: structuredIntent({ kind: "request", recipient: b.from, amount: b.amount, currency: b.currency ?? null, note: b.note ?? null, noteEn: b.note ?? null }),
     });
   });
 }

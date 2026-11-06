@@ -11,6 +11,7 @@ export const structuredIntent = (i: Pick<Intent, "kind"> & Partial<Intent>): Int
   amount: null,
   currency: null,
   note: null,
+  noteEn: null,
   includeMe: true,
   language: "en",
   clarification: null,

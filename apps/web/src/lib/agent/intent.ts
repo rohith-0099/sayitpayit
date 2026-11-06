@@ -15,6 +15,8 @@ export interface Intent {
   currency: string | null;
   /** Short purpose in the user's own words/language ("for the logo"). */
   note: string | null;
+  /** The same purpose in English (invoices are always English). */
+  noteEn: string | null;
   /** Split: whether the user also pays a share. */
   includeMe: boolean;
   /** BCP-47 primary language of the user's command ("en", "es", "ml"). */
@@ -39,11 +41,12 @@ const INTENT_SCHEMA = {
     amount: { type: "NUMBER", nullable: true },
     currency: { type: "STRING", nullable: true },
     note: { type: "STRING", nullable: true },
+    noteEn: { type: "STRING", nullable: true },
     includeMe: { type: "BOOLEAN" },
     language: { type: "STRING" },
     clarification: { type: "STRING", nullable: true },
   },
-  required: ["kind", "recipient", "members", "amount", "currency", "note", "includeMe", "language", "clarification"],
+  required: ["kind", "recipient", "members", "amount", "currency", "note", "noteEn", "includeMe", "language", "clarification"],
 };
 
 const SYSTEM = `You turn a spoken money command into JSON for SayItPayIt, a voice payment app on PayPal.
@@ -61,8 +64,9 @@ Rules:
 - currency: ISO code only if the user said or clearly implied one ("euros"→EUR, "bucks"/"dollars"→USD, "pesos"→MXN, "rupees"→INR, "yen"→JPY). Otherwise null.
 - amount: a number in that currency; for split it is the bill TOTAL. Words like "fifty" or "cincuenta" → 50.
 - note: the purpose as a short natural phrase in the user's language, without the amount, the person or the word "for" ("for the logo" → "the logo", "para la renta" → "la renta"). null if none.
+- noteEn: the same purpose in plain English ("la renta" → "rent", "el logo" → "the logo"). null if none.
 - includeMe: true unless the user says the others should cover all of it.
-- language: the language the user spoke.
+- language: the language of the command TEXT (ISO 639-1). Judge by the words, not by names in it.
 - clarification: if kind is pay/request/split but the person or amount is missing, ask ONE short question in the user's language. Otherwise null.`;
 
 export async function parseIntent(text: string, ctx: { contacts: Contact[]; homeCurrency: string; receipt?: Receipt | null }): Promise<Intent> {

@@ -1,5 +1,35 @@
 # SayItPayIt — Build Plan
 
+## Status (keep this current; a new session resumes from here)
+_Last updated: 2026-11-06._
+
+- [x] **Phase 0** Restructure: Next.js app, Guardian FastAPI, Docker Postgres.
+- [x] **Phase 1** PayPal core: payouts, invoices (+QR), orders, verified webhooks (real `INVOICING.INVOICE.PAID` received via tunnel).
+- [x] **Phase 2** Data model + deterministic seed (`npm run db:seed`), contact matching, FX.
+- [x] **Phase 3** Link PayPal once (JS SDK v6 + Vault v3); payments charge the vaulted wallet with no popup.
+- [x] **Phase 4** Voice + LangGraph agent, live step UI, Gemini intent/vision, Groq Whisper, fee read-back, receipt split.
+- [x] **Phase 5** Guardian voice gate: ECAPA speaker match (3 zones), random 4-digit challenge phrase, AASIST-L as a weak signal (threshold 0.9). Verified with the user's real voice (match 75/100); impostor and replay rejected.
+  - [x] Follow-ups: reply in the language of the transcript (English re-check when Whisper guesses wrong), invoices always English, Noto script fallbacks, Kokoro TTS (`af_heart`) + Gemini TTS fallback.
+- [ ] **Phase 6** Our models: scam-command dataset (Gemini), multilingual scam classifier, XGBoost risk model on PaySim + synthetic. **Needs:** PaySim CSV in `services/guardian/data/raw/`.
+- [ ] **Phase 7** Scam Interrupt (LLM questions), Guardian mode (family approval link), passkey step-up.
+- [ ] **Phase 8** Smart invoice page `/i/[id]` (English) + friendly reminders.
+- [ ] **Phase 9** AG Studio dashboard + Insights agent.
+- [ ] **Phase 10** Render deploy (web, Guardian, Postgres, Workflows) + production webhook.
+- [ ] **Phase 11** Judge-ready README, architecture diagram, fresh-clone test.
+- [ ] **Phase 12** Video + Devpost submission.
+- [ ] **Stretch (only if time is left):** hands-free wake word ("Hey Pay").
+
+### How to run locally
+`docker compose up -d` → `cd apps/web && npm run dev` → `cd services/guardian && .venv/bin/uvicorn app.main:app --port 8000`.
+Useful: `npm run demo:reset` (local retakes), `npm run webhook:setup -- <tunnel>`, `npm run paypal:reset-token`, `npm run build:verify` (never `npm run build` while `next dev` runs: they share Turbopack's cache).
+
+### Decisions worth knowing
+- Every money action (voice, typed, `/api/pay|request|split`) goes through the LangGraph flow and stops at Confirm; payments by a Voice-ID user need the spoken challenge phrase.
+- Spanish is the non-English language for the video (Whisper auto-detect is reliable only for en/es; Malayalam needs the "Speaking" picker).
+- Gemini: `gemini-3.5-flash-lite` first (≈1 s), fallback chain in `apps/web/src/lib/ai/gemini.ts`.
+
+---
+
 Work top to bottom. Each phase ends with **Done when** checks. Test them, then commit.
 Deadline: Nov 12, 2026, 12:00 PM PT (Nov 13, 1:30 AM IST). Video + Devpost need the last day, so build must finish by Nov 11 night.
 
@@ -36,7 +66,7 @@ If running behind, cut in this order (last first): Insights agent → passkey st
 **Done when:** a user links once, then a voice/text pay works with no PayPal popup.
 
 ## Phase 4: Voice + agent graph
-- Mic UI (push-to-talk + optional wake word "Hey Pay"), live transcript, spoken replies (browser TTS is fine).
+- Mic UI (tap to talk; wake word "Hey Pay" moved to a stretch goal), live transcript, spoken replies (Kokoro TTS, Gemini TTS fallback).
 - Groq Whisper STT route. Language auto-detect.
 - LangGraph.js graph exactly as in CLAUDE.md. Gemini Flash for intent + tool calling. PayPal tools via `@paypal/agent-toolkit` where it fits, plus our helpers.
 - Confirm step: read back recipient, amount, fees, recipient-receives amount (FX), F&F vs G&S label.

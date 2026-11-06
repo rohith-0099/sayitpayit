@@ -18,8 +18,9 @@
   --color-signal: #3fd0b6;
   --color-amber: #f2b544;
   --color-coral: #ff6b5e;
-  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-lexend), ui-sans-serif, system-ui, sans-serif;
+  --font-scripts: var(--font-noto), var(--font-noto-ta), var(--font-noto-ml), var(--font-noto-hi);
+  --font-display: var(--font-bricolage), var(--font-scripts), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-lexend), var(--font-scripts), ui-sans-serif, system-ui, sans-serif;
 }
 
 html {
