@@ -12,7 +12,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "test": "node --conditions=react-server --import tsx --test \"src/**/*.test.ts\"",
-    "webhook:setup": "node --env-file=.env.local scripts/setup-webhook.mjs"
+    "webhook:setup": "node --env-file=.env.local scripts/setup-webhook.mjs",
+    "paypal:reset-token": "node --env-file=.env.local scripts/reset-paypal-token.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",

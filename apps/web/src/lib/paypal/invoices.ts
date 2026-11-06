@@ -113,11 +113,23 @@ export async function generateInvoiceQR(id: string, size = 400): Promise<string>
   return `data:image/png;base64,${extractBase64(res)}`;
 }
 
+/**
+ * PayPal sends the QR as multipart form-data:
+ *   --<boundary>\r\n<headers>\r\n\r\n<base64 PNG>\r\n--<boundary>--
+ * Take the body of the first part (or the whole string if it isn't multipart).
+ */
 export function extractBase64(res: unknown): string {
   if (typeof res !== "string") throw new Error("Unexpected QR response from PayPal");
-  // Multipart: take the longest base64-looking run.
-  const runs = res.match(/[A-Za-z0-9+/=\r\n]{200,}/g);
-  const b64 = (runs ? runs.sort((a, b) => b.length - a.length)[0] : res).replace(/\s+/g, "");
+  let body = res;
+  if (res.startsWith("--")) {
+    const boundary = res.slice(0, res.search(/\r?\n/));
+    const headerEnd = res.search(/\r?\n\r?\n/);
+    if (headerEnd < 0) throw new Error("Could not parse QR code from PayPal response");
+    body = res.slice(headerEnd).replace(/^\s+/, "");
+    const end = body.indexOf(boundary);
+    if (end >= 0) body = body.slice(0, end);
+  }
+  const b64 = body.replace(/\s+/g, "");
   if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) throw new Error("Could not parse QR code from PayPal response");
   return b64;
 }
