@@ -1,6 +1,7 @@
 import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
+import { classifyScam } from "../guardian-client";
 import type { User } from "../db/schema";
 
 export type Decision = "ALLOW" | "ASK_QUESTIONS" | "GUARDIAN_HOLD" | "PASSKEY_REQUIRED" | "BLOCK";
@@ -32,7 +33,7 @@ export interface GuardianInput {
   voice?: { status: string; spoofSuspect?: boolean | null } | null;
 }
 
-// Interim scam-language cues (multilingual). Phase 6 replaces these with our fine-tuned classifier.
+// Fallback scam cues, used only when the Guardian service (our classifier) is unreachable.
 const SCAM_CUES: { id: string; label: string; re: RegExp }[] = [
   { id: "gift_cards", label: "Mentions gift cards", re: /gift ?cards?|tarjetas? de regalo|itunes|google play card|steam card|geschenkkarte/i },
   { id: "authority", label: "Claims to be the tax office, police or a bank", re: /\b(irs|tax office|taxman|police|sheriff|social security|bank called|hacienda|polic[ií]a|sat\b|finanzamt|income tax)/i },
@@ -94,15 +95,29 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
   // Weak signal (AASIST-L false-positives on live mics); only raised for very high scores (Guardian threshold 0.9).
   if (v?.spoofSuspect) signals.push({ id: "synthetic_voice", label: "The voice may be a recording or AI voice", weight: 0.1 });
 
-  const cues = SCAM_CUES.filter((c) => c.re.test(input.command));
-  for (const c of cues) signals.push({ id: c.id, label: c.label, weight: W.scamCue });
-  const scamScore = Math.min(1, cues.length * 0.35);
+  // Scam language: our fine-tuned multilingual classifier in the Guardian service (Phase 6).
+  // If Guardian is unreachable, fall back to local keyword cues so a check still happens.
+  const model = await classifyScam(input.command);
+  let scamScore: number;
+  let cueCount: number;
+  if (model) {
+    scamScore = model.probability;
+    cueCount = model.signals.length;
+    if (scamScore >= 0.5) signals.push({ id: "scam_language", label: `Sounds like a known scam (${Math.round(scamScore * 100)}% match)`, weight: Math.min(0.7, scamScore * 0.7) });
+    for (const c of model.signals) signals.push({ id: c.id, label: c.label, weight: scamScore >= 0.5 ? 0.15 : 0.05 });
+  } else {
+    const cues = SCAM_CUES.filter((c) => c.re.test(input.command));
+    for (const c of cues) signals.push({ id: c.id, label: c.label, weight: W.scamCue });
+    scamScore = Math.min(1, cues.length * 0.35);
+    cueCount = cues.length;
+  }
 
   const riskScore = Math.round((1 - signals.reduce((p, s) => p * (1 - s.weight), 1)) * 100) / 100;
+  // Interim decision rules; Phase 7 adds the Scam Interrupt questions and Guardian-mode hold.
   let decision: Decision =
     input.kind !== "pay" ? "ALLOW"
-    : cues.length >= 2 || riskScore >= 0.8 ? "BLOCK"
-    : cues.length === 1 || riskScore >= 0.45 ? "ASK_QUESTIONS"
+    : (scamScore >= 0.9 && cueCount >= 2) || riskScore >= 0.9 ? "BLOCK"
+    : scamScore >= 0.5 || riskScore >= 0.45 ? "ASK_QUESTIONS"
     : "ALLOW";
   if (decision === "ALLOW" && input.kind === "pay" && input.homeAmount >= 1000) decision = "PASSKEY_REQUIRED";
   if (forceBlock) decision = "BLOCK";
@@ -123,7 +138,7 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     .values({ userId: user.id, decision, riskScore, scamScore, signals, explanation })
     .returning({ id: schema.guardianEvents.id });
 
-  return { decision, riskScore, scamScore, signals, explanation, engine: "rules", eventId: event.id };
+  return { decision, riskScore, scamScore, signals, explanation, engine: model ? "guardian-service" : "rules", eventId: event.id };
 }
 
 export async function linkGuardianEvent(eventId: string, transactionId: string) {

@@ -10,7 +10,10 @@ _Last updated: 2026-11-06._
 - [x] **Phase 4** Voice + LangGraph agent, live step UI, Gemini intent/vision, Groq Whisper, fee read-back, receipt split.
 - [x] **Phase 5** Guardian voice gate: ECAPA speaker match (3 zones), random 4-digit challenge phrase, AASIST-L as a weak signal (threshold 0.9). Verified with the user's real voice (match 75/100); impostor and replay rejected.
   - [x] Follow-ups: reply in the language of the transcript (English re-check when Whisper guesses wrong), invoices always English, Noto script fallbacks, Kokoro TTS (`af_heart`) + Gemini TTS fallback.
-- [ ] **Phase 6** Our models: scam-command dataset (Gemini), multilingual scam classifier, XGBoost risk model on PaySim + synthetic. **Needs:** PaySim CSV in `services/guardian/data/raw/`.
+- [ ] **Phase 6** Our models.
+  - [x] Scam-command dataset: 1,600 Gemini-generated commands, 8 languages, 10 scam tactics + hard negatives (`services/guardian/data/scam_commands.jsonl`).
+  - [x] Scam classifier: fine-tuned multilingual MiniLM-L12, test F1 0.976 / recall 1.0 / hard-negative FPR 3.8% (synthetic data, so optimistic), `POST /scam/classify`, wired into Guardian (`docs/metrics/scam_classifier.json`).
+  - [ ] XGBoost risk model on PaySim + our synthetic agent payments, `POST /risk/score`. **Blocked:** PaySim CSV not found in `services/guardian/data/raw/`.
 - [ ] **Phase 7** Scam Interrupt (LLM questions), Guardian mode (family approval link), passkey step-up.
 - [ ] **Phase 8** Smart invoice page `/i/[id]` (English) + friendly reminders.
 - [ ] **Phase 9** AG Studio dashboard + Insights agent.

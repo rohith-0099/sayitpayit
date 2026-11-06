@@ -51,3 +51,25 @@ export function verifyVoice(audio: Blob, embedding: number[], opts: { expectedPh
   if (opts.transcript !== undefined) form.append("transcript", opts.transcript);
   return post<VoiceVerify>("/voice/verify", form, 15_000);
 }
+
+export interface ScamResult {
+  probability: number;
+  label: "scam" | "normal";
+  signals: { id: string; label: string }[];
+  model: string;
+}
+
+/** Our fine-tuned multilingual scam classifier. Null when Guardian (or the model) is unavailable. */
+export async function classifyScam(text: string): Promise<ScamResult | null> {
+  try {
+    const r = await fetch(`${base()}/scam/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers() },
+      body: JSON.stringify({ text: text.slice(0, 1000) }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return r.ok ? ((await r.json()) as ScamResult) : null;
+  } catch {
+    return null;
+  }
+}

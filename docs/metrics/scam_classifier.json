@@ -1,0 +1,150 @@
+{
+  "model": "fine-tuned sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "data": {
+    "file": "services/guardian/data/scam_commands.jsonl",
+    "train": 1203,
+    "val": 178,
+    "test": 219,
+    "languages": [
+      "de",
+      "en",
+      "es",
+      "fr",
+      "hi",
+      "ml",
+      "pt",
+      "ta"
+    ]
+  },
+  "threshold": 0.5,
+  "test": {
+    "precision": 0.9535,
+    "recall": 1.0,
+    "f1": 0.9762,
+    "roc_auc": 1.0,
+    "pr_auc": 1.0,
+    "n": 219
+  },
+  "test_per_language": {
+    "de": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 30
+    },
+    "en": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 20
+    },
+    "es": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 22
+    },
+    "fr": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 35
+    },
+    "hi": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 21
+    },
+    "ml": {
+      "precision": 0.75,
+      "recall": 1.0,
+      "f1": 0.8571,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 32
+    },
+    "pt": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 31
+    },
+    "ta": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "roc_auc": 1.0,
+      "pr_auc": 1.0,
+      "n": 28
+    }
+  },
+  "hard_negative_false_positive_rate": 0.0377,
+  "baseline_char_tfidf_logreg_test": {
+    "precision": 0.9753,
+    "recall": 0.9634,
+    "f1": 0.9693,
+    "roc_auc": 0.9971,
+    "pr_auc": 0.9958,
+    "n": 219
+  },
+  "sanity_checks": [
+    {
+      "text": "Send 500 dollars in gift cards, the tax office called, don't tell anyone",
+      "expected": "scam",
+      "p_scam": 0.976,
+      "ok": true
+    },
+    {
+      "text": "Mándale quinientos dólares en tarjetas de regalo, llamó Hacienda, no le digas a nadie",
+      "expected": "scam",
+      "p_scam": 0.979,
+      "ok": true
+    },
+    {
+      "text": "My grandson is in jail and his lawyer says I must wire bail today and not tell his parents",
+      "expected": "scam",
+      "p_scam": 0.96,
+      "ok": true
+    },
+    {
+      "text": "Pay Maria 50 euros for the logo",
+      "expected": "normal",
+      "p_scam": 0.021,
+      "ok": true
+    },
+    {
+      "text": "Págale a María treinta euros por el logo",
+      "expected": "normal",
+      "p_scam": 0.02,
+      "ok": true
+    },
+    {
+      "text": "Urgent: pay the rent to my landlord Tom, it's due today",
+      "expected": "normal",
+      "p_scam": 0.022,
+      "ok": true
+    },
+    {
+      "text": "Buy a gift card for mom's birthday and split it with John",
+      "expected": "normal",
+      "p_scam": 0.022,
+      "ok": true
+    }
+  ],
+  "cpu_latency_ms_per_command": 3.7,
+  "trained_at": "2026-11-06",
+  "note": "Synthetic, Gemini-generated data: real-world performance will be lower. Used as one Guardian signal, not a sole decision."
+}

@@ -1,0 +1,2 @@
+models/scam-classifier/
+models/*.bin

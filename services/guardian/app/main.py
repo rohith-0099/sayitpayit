@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import tts
+from . import scam, tts
 
 from .voice import challenge, speaker, spoof
 from .voice.audio import SR, AudioError, load_audio, speech_seconds, trim_silence
@@ -21,7 +21,7 @@ from .voice.audio import SR, AudioError, load_audio, speech_seconds, trim_silenc
 VERSION = "0.2.0"
 MIN_SPEECH_SEC = 0.8
 MAX_UPLOAD = 5 * 1024 * 1024
-models_ready = {"speaker": False, "spoof": False, "tts": False}
+models_ready = {"speaker": False, "spoof": False, "tts": False, "scam": False}
 
 
 @asynccontextmanager
@@ -32,6 +32,9 @@ async def lifespan(_: FastAPI):
         models_ready["speaker"] = True
         spoof.load()
         models_ready["spoof"] = True
+        if scam.available():
+            scam.load()
+            models_ready["scam"] = True
 
         # Kokoro's English pipeline takes a while the first time (downloads models); warm it in the
         # background so /health and the voice gate are available immediately.
@@ -144,3 +147,18 @@ def text_to_speech(req: TtsRequest) -> Response:
         raise HTTPException(422, f"Kokoro doesn't support '{req.lang}'")
     wav = tts.synthesize(req.text.strip(), req.lang, req.speed)
     return Response(wav, media_type="audio/wav", headers={"Cache-Control": "public, max-age=86400"})
+
+
+class ScamRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+@app.post("/scam/classify", dependencies=[Depends(require_key)])
+def scam_classify(req: ScamRequest) -> dict:
+    """Command text → P(scam) from our fine-tuned multilingual classifier + readable signals."""
+    if not scam.available():
+        raise HTTPException(503, "scam model not trained yet (run training/scam_classifier.py)")
+    t0 = time.perf_counter()
+    out = scam.classify(req.text)
+    out["ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return out
