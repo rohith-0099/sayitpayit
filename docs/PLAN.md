@@ -13,9 +13,9 @@ _Last updated: 2026-11-12._
 - [ ] **Phase 6** Our models.
   - [x] Scam-command dataset: 1,600 Gemini-generated commands, 8 languages, 10 scam tactics + hard negatives (`services/guardian/data/scam_commands.jsonl`).
   - [x] Scam classifier: fine-tuned multilingual MiniLM-L12, test F1 0.976 / recall 1.0 / hard-negative FPR 3.8% (synthetic data, so optimistic), `POST /scam/classify`, wired into Guardian (`docs/metrics/scam_classifier.json`).
-  - [ ] XGBoost risk model on PaySim + our synthetic agent payments, `POST /risk/score`. **Blocked:** PaySim CSV not found in `services/guardian/data/raw/`.
+  - [ ] ~~XGBoost risk model on PaySim~~ **Skipped (2026-11-12):** PaySim CSV not found anywhere under the home folder; per the 1-hour rule. Guardian uses behaviour rules (new payee, amount spike, large amount, odd hour) + the scam classifier + the voice gate instead.
 - [x] **Phase 7** Scam Interrupt + Guardian mode. Scam signals → Gemini-written bank-style questions (one pause each) → Gemini verdict → safe continues to Confirm, otherwise hold + family approval page `/approve/[token]`; the user's screen polls and updates when the family member decides. Verified end to end (demo scam → hold → Elena stops it → nothing sent).
-  - Not verified: the "safe answers → continue" branch (no legit test phrase scored high enough to trigger questions).
+  - Both branches verified by `npm run test:guardian-flow` (A: honest answers about a $1,500 deposit to a new landlord continue to Confirm; B: scam answers → hold → family stops it).
   - Cut (per plan order): passkey step-up. Family link is shown on screen ("in production by SMS"); no SMS/email sending.
 - [ ] **Phase 8** Smart invoice page `/i/[id]` (English) + friendly reminders.
 - [x] **Phase 9** AG Studio dashboard (`/dashboard`, ag-studio 3.1.0): our data sources (money activity, Guardian checks, who owes what), theme on our tokens, 3 custom widgets (Guardian shield gauge, Who owes what, Cross-border tracker) in Studio's widget menu, 2 pages, transaction grid with risk + decision. Studio's AI agent runs on **Gemini** via our adapter (`/api/ai/turn`); "Ask" (typed or voice) opens the AI panel and the agent builds widgets live. Verified: "Show what I sent Maria this month" → agent added + filtered + configured a chart (~90 s on free tier).
