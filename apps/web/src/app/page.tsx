@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { VoiceAgent } from "@/components/agent/VoiceAgent";
+import { LiteModeBanner } from "@/components/LiteModeBanner";
 import { listActivity, listOutstanding } from "@/lib/payments/service";
 import { getCurrentUser } from "@/lib/users";
 import { getVoiceProfile } from "@/lib/voice";
@@ -24,6 +25,9 @@ export default function Home() {
     <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-12 px-6 py-8 sm:px-10 lg:py-10">
       <Suspense fallback={<Header />}>
         <HeaderWithUser />
+      </Suspense>
+      <Suspense fallback={null}>
+        <LiteModeBanner />
       </Suspense>
       <Suspense fallback={<p className="text-mist">Loading…</p>}>
         <Agent />

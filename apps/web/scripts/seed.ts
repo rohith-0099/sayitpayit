@@ -13,7 +13,11 @@ import { fallbackRate, round2 } from "../src/lib/fx";
 import * as s from "../src/lib/db/schema";
 import { generateSeed, SEED_CONTACTS, SEED_TRUSTED_CONTACT, type ContactKey } from "../src/lib/seed/data";
 
-process.loadEnvFile?.(".env.local");
+try {
+  process.loadEnvFile?.(".env.local");
+} catch {
+  // no .env.local (e.g. on Render): use the real environment
+}
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL missing (apps/web/.env.local)");
 
 const client = postgres(process.env.DATABASE_URL, { max: 1 });

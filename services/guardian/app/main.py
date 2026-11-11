@@ -27,6 +27,8 @@ models_ready = {"speaker": False, "spoof": False, "tts": False, "scam": False}
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Load once at startup so the first verification is fast (ECAPA downloads on first run).
+    if os.environ.get("SPACE_ID") and not os.environ.get("GUARDIAN_API_KEY"):
+        raise RuntimeError("Set the GUARDIAN_API_KEY secret on this Space: its URL is public.")
     if os.environ.get("GUARDIAN_SKIP_MODEL_LOAD") != "1":
         speaker.load()
         models_ready["speaker"] = True

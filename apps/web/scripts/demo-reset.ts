@@ -9,7 +9,11 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-process.loadEnvFile?.(".env.local");
+try {
+  process.loadEnvFile?.(".env.local");
+} catch {
+  // no .env.local (e.g. on Render): use the real environment
+}
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL missing (apps/web/.env.local)");
 const host = new URL(url).hostname;

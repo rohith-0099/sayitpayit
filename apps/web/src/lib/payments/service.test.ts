@@ -2,7 +2,11 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-process.loadEnvFile?.(".env.local");
+try {
+  process.loadEnvFile?.(".env.local");
+} catch {
+  // no .env.local (e.g. on Render): use the real environment
+}
 const skip = !process.env.DATABASE_URL;
 
 test("applyWebhook updates the matching transaction once (idempotent)", { skip }, async () => {

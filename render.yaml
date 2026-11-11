@@ -1,0 +1,48 @@
+# Render Blueprint: the SayItPayIt web app + a free Postgres.
+# The Guardian ML service (voice ID, scam model, Kokoro voice) needs ~2 GB RAM, more than Render's free
+# 512 MB, so it runs on a free Hugging Face Space (services/guardian/Dockerfile) and the web app reaches
+# it through GUARDIAN_URL. If it's asleep, the app shows a lite-mode banner and uses Guardian's rules.
+databases:
+  - name: sayitpayit-db
+    plan: free
+    databaseName: sayitpayit
+    user: sayitpayit
+
+services:
+  - type: web
+    name: sayitpayit
+    runtime: node
+    plan: free
+    rootDir: apps/web
+    buildCommand: npm ci && npm run build
+    # Migrations + the deterministic demo seed run on every start (the seed only replaces its own rows).
+    startCommand: npm run db:migrate && npm run db:seed && npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sayitpayit-db
+          property: connectionString
+      - key: NODE_VERSION
+        value: "22"
+      # Fill these in on Render (Dashboard → Environment). Sandbox credentials only.
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GUARDIAN_URL
+        sync: false
+      - key: GUARDIAN_API_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: AG_STUDIO
+        sync: false

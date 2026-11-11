@@ -1,0 +1,7 @@
+.venv
+__pycache__
+.pytest_cache
+pretrained_models
+models
+data/raw
+*.pyc
