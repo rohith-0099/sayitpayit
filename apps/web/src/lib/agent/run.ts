@@ -1,6 +1,7 @@
 import "server-only";
 import { Command } from "@langchain/langgraph";
 import { ApiError } from "../errors";
+import { classifyAnswer } from "./answers";
 import { getAgent, type AgentInput, type AgentState, type Readback } from "./graph";
 import type { Intent } from "./intent";
 
@@ -22,11 +23,13 @@ export type AgentEvent =
   | { type: "thread"; threadId: string }
   | { type: "update"; node: string; steps: AgentState["steps"] }
   | { type: "confirm"; threadId: string; readback: Readback; reask: boolean; note: string | null; view: PublicView }
+  | { type: "question"; threadId: string; question: string; index: number; total: number; view: PublicView }
+  | { type: "hold"; threadId: string; contactName: string; url: string; reason: string; view: PublicView }
   | { type: "final"; threadId: string; view: PublicView }
   | { type: "error"; message: string; code?: string };
 
 /** What the browser may see (no vault ids, no raw PayPal tokens). */
-export type PublicView = Pick<AgentState, "language" | "intent" | "receipt" | "voice" | "quote" | "readback" | "result" | "outcome" | "reply" | "steps"> & {
+export type PublicView = Pick<AgentState, "language" | "intent" | "receipt" | "voice" | "quote" | "readback" | "result" | "outcome" | "reply" | "steps" | "interview"> & {
   guardian: Omit<NonNullable<AgentState["guardian"]>, "eventId"> | null;
 };
 
@@ -49,23 +52,64 @@ const view = (s: AgentState): PublicView => ({
   outcome: s.outcome,
   reply: s.reply,
   steps: s.steps,
+  interview: s.interview,
 });
+
+type Pending = { type: "confirm"; readback: Readback; reask: boolean; note: string | null } | { type: "question"; question: string; index: number; total: number } | { type: "hold"; contactName: string; url: string; reason: string };
+
+/** The event that describes where a conversation is now (paused or finished). */
+function stateEvent(threadId: string, state: AgentState, pending: Pending | undefined): AgentEvent {
+  const v = view(state);
+  if (!pending) return { type: "final", threadId, view: v };
+  if (pending.type === "question") return { type: "question", threadId, question: pending.question, index: pending.index, total: pending.total, view: v };
+  if (pending.type === "hold") return { type: "hold", threadId, contactName: pending.contactName, url: pending.url, reason: pending.reason, view: v };
+  return { type: "confirm", threadId, readback: pending.readback, reask: pending.reask, note: pending.note ?? null, view: v };
+}
+
+/** Current state of a conversation (the UI polls this while waiting for the family's decision). */
+export async function currentEvent(userId: string, threadId: string): Promise<AgentEvent> {
+  const snap = await (await getAgent()).getState({ configurable: { thread_id: threadId } });
+  if (!snap.values?.userId) throw new ApiError(404, "That conversation has expired.");
+  if (snap.values.userId !== userId) throw new ApiError(403, "Not your conversation.");
+  return stateEvent(threadId, snap.values as AgentState, snap.tasks.flatMap((t) => t.interrupts ?? [])[0]?.value as Pending | undefined);
+}
 
 /**
  * Run the graph (new thread or resume) and yield UI events as nodes finish.
  * Ends with either `confirm` (paused for the user's yes/no) or `final`.
  */
-export async function* runAgent(opts: { userId: string; threadId: string; input?: AgentInput; answer?: string; voiceCheckId?: string | null }): AsyncGenerator<AgentEvent> {
+export async function* runAgent(opts: {
+  userId: string;
+  threadId: string;
+  input?: AgentInput;
+  /** The user's answer to whatever the conversation is waiting on (confirm / question / hold). */
+  answer?: string;
+  voiceCheckId?: string | null;
+  /** The trusted contact's decision (authorised by the hold token, not the user's session). */
+  familyDecision?: "approved" | "denied";
+}): AsyncGenerator<AgentEvent> {
   const agent = await getAgent();
   const config = { configurable: { thread_id: opts.threadId } };
 
   let payload: unknown;
-  if (opts.answer !== undefined) {
+  if (opts.answer !== undefined || opts.familyDecision) {
     const snap = await agent.getState(config);
     if (!snap.values?.userId) throw new ApiError(404, "That conversation has expired. Say the payment again.");
     if (snap.values.userId !== opts.userId) throw new ApiError(403, "Not your conversation.");
-    if (!snap.next.includes("confirm")) throw new ApiError(409, "Nothing is waiting for a yes or no.");
-    payload = new Command({ resume: { answer: opts.answer, voiceCheckId: opts.voiceCheckId ?? null } });
+    const pending = snap.tasks.flatMap((t) => t.interrupts ?? [])[0]?.value as Pending | undefined;
+    if (!pending) throw new ApiError(409, "Nothing is waiting for an answer.");
+    if (opts.familyDecision) {
+      if (pending.type !== "hold") throw new ApiError(409, "This payment isn't waiting for family approval.");
+      payload = new Command({ resume: { decision: opts.familyDecision } });
+    } else if (pending.type === "hold") {
+      // While on hold the user can only cancel; approving is the family member's call.
+      if (classifyAnswer(opts.answer!) !== "no" && !/^cancel/i.test(opts.answer!)) throw new ApiError(409, `Waiting for ${pending.contactName} to approve. Say "cancel" to stop it.`);
+      payload = new Command({ resume: { decision: "cancelled" } });
+    } else if (pending.type === "question") {
+      payload = new Command({ resume: { answer: opts.answer } });
+    } else {
+      payload = new Command({ resume: { answer: opts.answer, voiceCheckId: opts.voiceCheckId ?? null } });
+    }
   } else {
     payload = { userId: opts.userId, input: opts.input, steps: { listening: { status: "done" }, understood: { status: "active" } } };
     yield { type: "thread", threadId: opts.threadId };
@@ -80,14 +124,7 @@ export async function* runAgent(opts: { userId: string; threadId: string; input?
   }
 
   const snap = await agent.getState(config);
-  const state = snap.values as AgentState;
-  const pending = snap.tasks.flatMap((t) => t.interrupts ?? [])[0];
-  if (pending) {
-    const v = pending.value as { readback: Readback; reask: boolean; note: string | null };
-    yield { type: "confirm", threadId: opts.threadId, readback: v.readback, reask: v.reask, note: v.note ?? null, view: view(state) };
-  } else {
-    yield { type: "final", threadId: opts.threadId, view: view(state) };
-  }
+  yield stateEvent(opts.threadId, snap.values as AgentState, snap.tasks.flatMap((t) => t.interrupts ?? [])[0]?.value as Pending | undefined);
 }
 
 /** Stream AgentEvents as Server-Sent Events. Errors become an `error` event. */

@@ -113,10 +113,12 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
   }
 
   const riskScore = Math.round((1 - signals.reduce((p, s) => p * (1 - s.weight), 1)) * 100) / 100;
-  // Interim decision rules; Phase 7 adds the Scam Interrupt questions and Guardian-mode hold.
+  // Scam Interrupt: suspicious payments get bank-style questions first (never a silent block), and
+  // the answers decide whether it continues or goes on hold for family approval. BLOCK is reserved
+  // for a voice that isn't the user's, or a voice check that couldn't run (forceBlock, below).
+  void cueCount;
   let decision: Decision =
     input.kind !== "pay" ? "ALLOW"
-    : (scamScore >= 0.9 && cueCount >= 2) || riskScore >= 0.9 ? "BLOCK"
     : scamScore >= 0.5 || riskScore >= 0.45 ? "ASK_QUESTIONS"
     : "ALLOW";
   if (decision === "ALLOW" && input.kind === "pay" && input.homeAmount >= 1000) decision = "PASSKEY_REQUIRED";

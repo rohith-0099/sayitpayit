@@ -275,6 +275,30 @@ export const guardianEvents = pgTable(
   (t) => [index("guardian_user_created_idx").on(t.userId, t.createdAt)],
 );
 
+/**
+ * Guardian mode: a high-risk payment paused until a trusted family member approves or stops it
+ * from their link (/approve/[token]). The agent conversation (threadId) waits on this.
+ */
+export const guardianHolds = pgTable(
+  "guardian_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull().unique(),
+    /** Unguessable secret in the approval link. */
+    token: text("token").notNull().unique(),
+    trustedContactId: uuid("trusted_contact_id").references(() => trustedContacts.id, { onDelete: "set null" }),
+    status: text("status", { enum: ["pending", "approved", "denied", "cancelled"] }).notNull().default("pending"),
+    /** What the family member sees: who, how much, why Guardian paused it, the Q&A. */
+    summary: jsonb("summary").notNull(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("guardian_holds_user_idx").on(t.userId, t.createdAt)],
+);
+
 // ---------- Webhooks ----------
 
 /** Every verified webhook, keyed by PayPal event id so redeliveries are no-ops. */
@@ -291,3 +315,4 @@ export type Contact = typeof contacts.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type GuardianEvent = typeof guardianEvents.$inferSelect;
 export type VoiceCheck = typeof voiceChecks.$inferSelect;
+export type GuardianHold = typeof guardianHolds.$inferSelect;

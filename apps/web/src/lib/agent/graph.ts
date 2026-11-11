@@ -15,12 +15,17 @@ import { classifyAnswer, type Answer } from "./answers";
 import { linkGuardianEvent, runGuardian, type GuardianResult } from "./guardian";
 import { parseIntent, parseReceipt, type Intent, type Receipt } from "./intent";
 import { localize, localizeCard } from "./language";
+import { assessAnswers, writeQuestions } from "./interview";
+import { cancelHold, openHold } from "../holds";
 import { resolveLanguage } from "./lang";
 
 // ---------------------------------------------------------------------------
 // Flow (fixed order; Guardian and Confirm can never be skipped):
 //
 //   START → understand → resolve → voiceGate → guardianCheck ─┬─ BLOCK ─────────────→ respond → END
+//                                     ASK_QUESTIONS → writeQuestions → askQuestions ─┬─ safe ─→ prepare
+//                                                                            └─ else ─→ familyHold ─┬─ approved → prepare
+//                                                                                                       └─ denied ──→ respond
 //                                                        └→ prepare → confirm ─┬─ yes → execute → respond
 //                                                                              ├─ no ──────────→ respond
 //                                                                              └─ unclear → confirm (ask again)
@@ -107,6 +112,11 @@ const State = Annotation.Root({
   challenge: Annotation<string | null>({ reducer: merge, default: () => null }),
   /** Why the last answer wasn't accepted (shown + spoken on re-ask). */
   confirmNote: Annotation<string | null>({ reducer: merge, default: () => null }),
+  /** Scam Interrupt: Gemini-written questions, the answers, and the verdict. */
+  questions: Annotation<string[] | null>({ reducer: merge, default: () => null }),
+  interview: Annotation<{ qa: { q: string; a: string }[]; verdict: "safe" | "scam" | "unclear"; reason: string; familySummary: string } | null>({ reducer: merge, default: () => null }),
+  /** Guardian mode: paused for the trusted contact's decision. */
+  hold: Annotation<{ status: "pending" | "approved" | "denied" | "cancelled"; contactName: string; url: string } | null>({ reducer: merge, default: () => null }),
   guardian: Annotation<GuardianResult | null>({ reducer: merge, default: () => null }),
   quote: Annotation<Quote | null>({ reducer: merge, default: () => null }),
   readback: Annotation<Readback | null>({ reducer: merge, default: () => null }),
@@ -303,6 +313,78 @@ const CATEGORY_LABELS: Record<string, Record<"friends_family" | "business", stri
   hi: { friends_family: "मित्र और परिवार", business: "वस्तुएं और सेवाएं" },
 };
 
+/** "Pay Maria €500.00 (gift cards)" for prompts and the family summary. */
+function describe(plan: Plan): string {
+  const who = plan.party?.name ?? plan.members?.map((m) => m.party.name).join(", ") ?? "someone";
+  const verb = { pay: "pay", request: "ask", split: "split a bill with" }[plan.kind];
+  return `${verb} ${who} ${money(plan.amount, plan.currency)}${plan.noteEn ? ` (${plan.noteEn})` : ""}`;
+}
+
+/** Scam Interrupt, step 1: write the questions (once; kept out of the interrupting node). */
+async function questions(s: AgentState): Promise<Partial<AgentState>> {
+  const qs = await writeQuestions({ signals: s.guardian!.signals, what: s.input.text, language: s.language });
+  return { questions: qs, steps: { guardian: { status: "warn", title: "Asking a few questions", detail: s.guardian!.explanation } } };
+}
+
+/** Scam Interrupt, step 2: ask each question (one pause per question), then judge the answers. */
+async function interview(s: AgentState): Promise<Partial<AgentState>> {
+  const qs = s.questions ?? [];
+  const qa: { q: string; a: string }[] = [];
+  for (const [i, q] of qs.entries()) {
+    const r = interrupt<{ type: "question"; index: number; total: number; question: string }, { answer: string }>({ type: "question", index: i, total: qs.length, question: q });
+    const a = (r?.answer ?? "").trim();
+    if (/^(cancel|stop|cancela|para)\b/i.test(a)) {
+      const text = await localize("Okay, I've cancelled it. Nothing was sent.", s.language);
+      return { outcome: "cancelled", reply: { text }, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
+    }
+    qa.push({ q, a: a || "(no answer)" });
+  }
+  const v = await assessAnswers({ what: describe(s.plan!), signals: s.guardian!.signals, qa, language: s.language });
+  const interviewState = { qa, ...v };
+  if (v.verdict === "safe") {
+    return { interview: interviewState, steps: { guardian: { status: "done", title: "Questions answered", detail: v.reason } } };
+  }
+  return { interview: interviewState, steps: { guardian: { status: "warn", title: "Pausing for family approval", detail: v.reason } } };
+}
+
+/** Guardian mode: pause until the trusted contact approves or stops it from their link. */
+async function hold(s: AgentState, config: LangGraphRunnableConfig): Promise<Partial<AgentState>> {
+  const user = await loadUser(s.userId);
+  const threadId = config.configurable?.thread_id as string;
+  const plan = s.plan!;
+  const { contact, url } = await openHold({
+    userId: s.userId,
+    threadId,
+    summary: {
+      userName: user.name,
+      what: describe(plan),
+      amountText: money(plan.amount, plan.currency),
+      recipient: plan.party?.name ?? "",
+      signals: s.guardian!.signals.map((x) => x.label),
+      qa: s.interview?.qa ?? [],
+      familySummary: s.interview?.familySummary ?? s.guardian!.explanation,
+      command: s.input.text,
+    },
+  });
+  const contactName = contact?.name.split(" ")[0] ?? "your family contact";
+  const r = interrupt<{ type: "hold"; contactName: string; url: string; reason: string }, { decision: "approved" | "denied" | "cancelled" }>({
+    type: "hold",
+    contactName,
+    url,
+    reason: s.interview?.reason ?? s.guardian!.explanation,
+  });
+  if (r?.decision === "approved") {
+    return { hold: { status: "approved", contactName, url }, steps: { guardian: { status: "done", title: `${contactName} approved`, detail: "You still confirm before anything is sent." } } };
+  }
+  if (r?.decision === "cancelled") {
+    await cancelHold(threadId);
+    const text = await localize("Okay, I've cancelled it. Nothing was sent.", s.language);
+    return { hold: { status: "cancelled", contactName, url }, outcome: "cancelled", reply: { text }, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
+  }
+  const text = await localize(`${contactName} stopped this payment. Nothing was sent, and your money is safe.`, s.language);
+  return { hold: { status: "denied", contactName, url }, outcome: "blocked", reply: { text }, steps: { guardian: { status: "error", title: `${contactName} stopped it` }, done: { status: "error", title: "Not sent" } } };
+}
+
 /** Build the read-back. Kept separate from `confirm` because interrupted nodes re-run on resume. */
 async function prepare(s: AgentState): Promise<Partial<AgentState>> {
   const user = await loadUser(s.userId);
@@ -357,7 +439,11 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
     };
   }
 
-  if (s.guardian && s.guardian.decision !== "ALLOW") {
+  if (s.hold?.status === "approved") {
+    readback.notes.unshift(`Guardian: ${s.hold.contactName} approved this payment.`);
+  } else if (s.interview?.verdict === "safe") {
+    readback.notes.unshift("Guardian: thanks for answering the questions.");
+  } else if (s.guardian && s.guardian.decision !== "ALLOW") {
     readback.notes.unshift(`Guardian: ${s.guardian.explanation}`);
     readback.spoken = `Before you answer: ${s.guardian.explanation} ${readback.spoken}`;
   }
@@ -433,6 +519,9 @@ async function confirm(s: AgentState, config: LangGraphRunnableConfig): Promise<
 async function execute(s: AgentState): Promise<Partial<AgentState>> {
   // Defence in depth: the edges already guarantee this, but money never moves on anything else.
   if (s.answer !== "yes" || !s.guardian || s.guardian.decision === "BLOCK") throw new Error("Refusing to execute without Guardian approval and an explicit yes");
+  if (s.guardian.decision === "ASK_QUESTIONS" && s.interview?.verdict !== "safe" && s.hold?.status !== "approved") {
+    throw new Error("Refusing to execute: Guardian's questions weren't cleared and no family approval");
+  }
 
   const user = await loadUser(s.userId);
   const plan = s.plan!;
@@ -490,6 +579,9 @@ const builder = new StateGraph(State)
   .addNode("resolve", resolve)
   .addNode("voiceGate", voiceGate)
   .addNode("guardianCheck", guardian)
+  .addNode("writeQuestions", questions)
+  .addNode("askQuestions", interview)
+  .addNode("familyHold", hold)
   .addNode("prepare", prepare)
   .addNode("confirm", confirm)
   .addNode("execute", execute)
@@ -498,7 +590,15 @@ const builder = new StateGraph(State)
   .addConditionalEdges("understand", (s) => (s.outcome ? "respond" : "resolve"), ["respond", "resolve"])
   .addConditionalEdges("resolve", (s) => (s.outcome ? "respond" : "voiceGate"), ["respond", "voiceGate"])
   .addEdge("voiceGate", "guardianCheck")
-  .addConditionalEdges("guardianCheck", (s) => (s.guardian?.decision === "BLOCK" ? "respond" : "prepare"), ["respond", "prepare"])
+  .addConditionalEdges(
+    "guardianCheck",
+    (s) => (s.guardian?.decision === "BLOCK" ? "respond" : s.guardian?.decision === "ASK_QUESTIONS" ? "writeQuestions" : s.guardian?.decision === "GUARDIAN_HOLD" ? "familyHold" : "prepare"),
+    ["respond", "writeQuestions", "familyHold", "prepare"],
+  )
+  .addEdge("writeQuestions", "askQuestions")
+  // Safe answers continue to the read-back; anything else goes to the family. Cancels end.
+  .addConditionalEdges("askQuestions", (s) => (s.outcome ? "respond" : s.interview?.verdict === "safe" ? "prepare" : "familyHold"), ["respond", "prepare", "familyHold"])
+  .addConditionalEdges("familyHold", (s) => (s.outcome ? "respond" : "prepare"), ["respond", "prepare"])
   .addEdge("prepare", "confirm")
   // Any final outcome (cancelled, blocked by a voice mismatch...) ends the flow; only "unclear" asks again.
   .addConditionalEdges("confirm", (s) => (s.answer === "yes" ? "execute" : s.outcome ? "respond" : "confirm"), ["execute", "respond", "confirm"])

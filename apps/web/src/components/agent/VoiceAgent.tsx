@@ -6,11 +6,13 @@ import type { Readback, StepId } from "@/lib/agent/graph";
 import type { AgentEvent, PublicView } from "@/lib/agent/run";
 import { fileToDataUrl, postStream, speak, stopSpeaking, transcribeAudio } from "./client";
 import { GuardianPanel } from "./GuardianPanel";
+import { HoldCard, QuestionCard } from "./InterruptCards";
 import { ReadbackCard } from "./ReadbackCard";
 import { Stepper, type UiStep } from "./Stepper";
 import { useRecorder } from "./useRecorder";
 
-type Phase = "idle" | "recording" | "transcribing" | "thinking" | "confirm" | "answering" | "final";
+type Phase = "idle" | "recording" | "transcribing" | "thinking" | "confirm" | "question" | "hold" | "answering" | "final";
+type Waiting = "confirm" | "question" | "hold";
 type Steps = Partial<Record<StepId, UiStep>>;
 
 const LANGS = [
@@ -35,6 +37,10 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [receipt, setReceipt] = useState<string | null>(null);
+  const [question, setQuestion] = useState<{ text: string; index: number; total: number } | null>(null);
+  const [holdInfo, setHoldInfo] = useState<{ contactName: string; url: string; reason: string } | null>(null);
+  /** What the agent is waiting on, so errors can return there. */
+  const waiting = useRef<Waiting>("confirm");
   const thread = useRef<string | null>(null);
   const mode = useRef<"command" | "answer">("command");
   const spokenCommand = useRef(false);
@@ -51,9 +57,34 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
     (e: AgentEvent) => {
       if (e.type === "thread") thread.current = e.threadId;
       else if (e.type === "update") setSteps((s) => ({ ...s, ...e.steps }));
-      else if (e.type === "confirm") {
+      else if (e.type === "question") {
+        waiting.current = "question";
         setView(e.view);
         setSteps(e.view.steps);
+        setReadback(null);
+        setHoldInfo(null);
+        setQuestion({ text: e.question, index: e.index, total: e.total });
+        setPhase("question");
+        void speak(e.question, e.view.language).then(() => {
+          if (spokenCommand.current) {
+            mode.current = "answer";
+            listenForAnswer.current();
+          }
+        });
+      } else if (e.type === "hold") {
+        waiting.current = "hold";
+        setView(e.view);
+        setSteps(e.view.steps);
+        setQuestion(null);
+        setHoldInfo({ contactName: e.contactName, url: e.url, reason: e.reason });
+        setPhase("hold");
+        void speak(e.reason, e.view.language);
+      } else if (e.type === "confirm") {
+        waiting.current = "confirm";
+        setView(e.view);
+        setSteps(e.view.steps);
+        setQuestion(null);
+        setHoldInfo(null);
         setReadback({ readback: e.readback, reask: e.reask, note: e.note });
         setPhase("confirm");
         void speak(e.note ?? e.readback.spoken, e.view.language).then(() => {
@@ -67,15 +98,17 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         setView(e.view);
         setSteps(e.view.steps);
         setReadback(null);
+        setQuestion(null);
+        setHoldInfo(null);
         setPhase("final");
         if (e.view.reply) void speak(e.view.reply.text, e.view.language);
         router.refresh(); // activity list below
       } else if (e.type === "error") {
         setError(e.message);
-        setPhase(readback ? "confirm" : "idle");
+        setPhase(thread.current ? waiting.current : "idle");
       }
     },
-    [router, readback],
+    [router],
   );
 
   const runCommand = useCallback(
@@ -83,6 +116,8 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       setError(null);
       setView(null);
       setReadback(null);
+      setQuestion(null);
+      setHoldInfo(null);
       thread.current = null;
       setTranscript(text || "Split this receipt");
       setSteps({ listening: { status: "done", title: source === "voice" ? "Heard you" : "Typed" }, understood: { status: "active" } });
@@ -108,7 +143,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         await postStream(`/api/agent/${thread.current}`, { answer: text, voiceCheckId }, onEvent);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Something went wrong.");
-        setPhase("confirm");
+        setPhase(waiting.current);
       }
     },
     [onEvent],
@@ -129,7 +164,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't hear that.");
-      setPhase(isAnswer ? "confirm" : "idle");
+      setPhase(isAnswer ? waiting.current : "idle");
       if (!isAnswer) setSteps({});
     }
   });
@@ -139,11 +174,23 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
     listenForAnswer.current = () => void startRecorder();
   }, [startRecorder]);
 
+  // While on hold, check for the family member's decision every 2 seconds.
+  useEffect(() => {
+    if (phase !== "hold" || !thread.current) return;
+    const id = setInterval(async () => {
+      const r = await fetch(`/api/agent/${thread.current}`, { cache: "no-store" }).catch(() => null);
+      const e = r?.ok ? ((await r.json()) as AgentEvent) : null;
+      if (e && e.type !== "hold") onEvent(e);
+    }, 2000);
+    return () => clearInterval(id);
+  }, [phase, onEvent]);
+
+  const isWaiting = phase === "confirm" || phase === "question" || phase === "hold";
   const micBusy = phase === "transcribing" || phase === "thinking" || phase === "answering";
   const toggleMic = () => {
     if (recorder.recording) return recorder.stop();
     stopSpeaking();
-    mode.current = phase === "confirm" ? "answer" : "command";
+    mode.current = phase === "confirm" || phase === "question" || phase === "hold" ? "answer" : "command";
     if (mode.current === "command") {
       setTranscript("");
       setView(null);
@@ -159,7 +206,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
     spokenCommand.current = false;
     const text = typed.trim();
     setTyped("");
-    if (phase === "confirm") void answer(text);
+    if (isWaiting) void answer(text);
     else void runCommand(text, "text", null);
   };
 
@@ -187,6 +234,34 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
             </div>
           )}
         </div>
+
+        {question && phase !== "final" && (
+          <QuestionCard
+            question={question}
+            busy={phase === "answering"}
+            listening={recorder.recording && phase === "question"}
+            onAnswerByVoice={() => {
+              stopSpeaking();
+              mode.current = "answer";
+              void recorder.start();
+            }}
+            onAnswer={(a) => {
+              recorder.cancel();
+              void answer(a);
+            }}
+          />
+        )}
+
+        {holdInfo && phase !== "final" && (
+          <HoldCard
+            hold={holdInfo}
+            busy={phase === "answering"}
+            onCancel={() => {
+              recorder.cancel();
+              void answer("cancel");
+            }}
+          />
+        )}
 
         {readback && phase !== "final" && (
           <ReadbackCard
@@ -290,7 +365,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                 id="typed"
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
-                placeholder={phase === "confirm" ? "Type yes or no" : receipt ? "Split with John and Maria" : "Or type it here"}
+                placeholder={phase === "confirm" ? "Type yes or no" : phase === "question" ? "Type your answer" : phase === "hold" ? "Type cancel to stop it" : receipt ? "Split with John and Maria" : "Or type it here"}
                 className="min-w-0 flex-1 rounded-full bg-panel px-5 py-3 text-paper ring-1 ring-line placeholder:text-mist/70 focus:ring-signal focus:outline-none"
               />
               <label className={`cursor-pointer rounded-full px-4 py-3 ring-1 transition ${receipt ? "text-signal ring-signal" : "text-mist ring-line hover:ring-mist"}`}>

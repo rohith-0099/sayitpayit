@@ -1,7 +1,7 @@
 # SayItPayIt — Build Plan
 
 ## Status (keep this current; a new session resumes from here)
-_Last updated: 2026-11-06._
+_Last updated: 2026-11-11._
 
 - [x] **Phase 0** Restructure: Next.js app, Guardian FastAPI, Docker Postgres.
 - [x] **Phase 1** PayPal core: payouts, invoices (+QR), orders, verified webhooks (real `INVOICING.INVOICE.PAID` received via tunnel).
@@ -14,7 +14,9 @@ _Last updated: 2026-11-06._
   - [x] Scam-command dataset: 1,600 Gemini-generated commands, 8 languages, 10 scam tactics + hard negatives (`services/guardian/data/scam_commands.jsonl`).
   - [x] Scam classifier: fine-tuned multilingual MiniLM-L12, test F1 0.976 / recall 1.0 / hard-negative FPR 3.8% (synthetic data, so optimistic), `POST /scam/classify`, wired into Guardian (`docs/metrics/scam_classifier.json`).
   - [ ] XGBoost risk model on PaySim + our synthetic agent payments, `POST /risk/score`. **Blocked:** PaySim CSV not found in `services/guardian/data/raw/`.
-- [ ] **Phase 7** Scam Interrupt (LLM questions), Guardian mode (family approval link), passkey step-up.
+- [x] **Phase 7** Scam Interrupt + Guardian mode. Scam signals → Gemini-written bank-style questions (one pause each) → Gemini verdict → safe continues to Confirm, otherwise hold + family approval page `/approve/[token]`; the user's screen polls and updates when the family member decides. Verified end to end (demo scam → hold → Elena stops it → nothing sent).
+  - Not verified: the "safe answers → continue" branch (no legit test phrase scored high enough to trigger questions).
+  - Cut (per plan order): passkey step-up. Family link is shown on screen ("in production by SMS"); no SMS/email sending.
 - [ ] **Phase 8** Smart invoice page `/i/[id]` (English) + friendly reminders.
 - [ ] **Phase 9** AG Studio dashboard + Insights agent.
 - [ ] **Phase 10** Render deploy (web, Guardian, Postgres, Workflows) + production webhook.

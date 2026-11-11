@@ -1,11 +1,20 @@
 import { z } from "zod";
 import { handle } from "@/lib/api";
-import { runAgent, sse } from "@/lib/agent/run";
+import { currentEvent, runAgent, sse } from "@/lib/agent/run";
 import { getCurrentUser } from "@/lib/users";
 
 const Body = z.object({ answer: z.string().trim().max(300), voiceCheckId: z.string().uuid().nullish() });
 
-/** Answer the read-back ("yes" / "no" / spoken text). Streams the rest of the flow. */
+/** Where the conversation is now (polled while waiting for the family's decision). */
+export async function GET(_req: Request, ctx: RouteContext<"/api/agent/[threadId]">) {
+  return handle(async () => {
+    const { threadId } = await ctx.params;
+    const user = await getCurrentUser();
+    return currentEvent(user.id, threadId);
+  });
+}
+
+/** Answer whatever the agent is waiting on (read-back yes/no, a Guardian question, or "cancel" on hold). */
 export async function POST(req: Request, ctx: RouteContext<"/api/agent/[threadId]">) {
   return handle(async () => {
     const { threadId } = await ctx.params;
