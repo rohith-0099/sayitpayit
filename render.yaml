@@ -1,46 +1,63 @@
-# Render Blueprint: the SayItPayIt web app + a free Postgres.
-# The Guardian ML service (voice ID, scam model, Kokoro voice) needs ~2 GB RAM, more than Render's free
-# 512 MB, so it runs on a free Hugging Face Space (services/guardian/Dockerfile) and the web app reaches
-# it through GUARDIAN_URL. If it's asleep, the app shows a lite-mode banner and uses Guardian's rules.
+# Render Blueprint: everything hosted (≈ $38/month, billed per second).
+#   sayitpayit           web app (Next.js)            0.5 CPU / 512 MB  ($7)
+#   sayitpayit-guardian  Guardian ML (Docker, Python)  1 CPU / 2 GB      ($25): Voice ID, scam model, Kokoro voice
+#   sayitpayit-db        Postgres                      0.1 CPU / 256 MB  ($6): paid, so it doesn't expire before judging
+# GUARDIAN_URL and GUARDIAN_API_KEY are wired automatically over Render's private network.
+# If Guardian is down, the web app falls back to lite mode (banner + Guardian's rules).
 databases:
   - name: sayitpayit-db
-    plan: free
+    plan: 0.1c-256mb
     databaseName: sayitpayit
     user: sayitpayit
 
 services:
   - type: web
+    name: sayitpayit-guardian
+    runtime: docker
+    plan: 1c-2g
+    dockerContext: ./services/guardian
+    dockerfilePath: ./services/guardian/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: GUARDIAN_API_KEY
+        generateValue: true
+
+  - type: web
     name: sayitpayit
     runtime: node
-    plan: free
+    plan: 0.5c-512mb
     rootDir: apps/web
     buildCommand: npm ci && npm run build
     # Migrations + the deterministic demo seed run on every start (the seed only replaces its own rows).
     startCommand: npm run db:migrate && npm run db:seed && npm run start
     healthCheckPath: /api/health
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       - key: DATABASE_URL
         fromDatabase:
           name: sayitpayit-db
           property: connectionString
-      - key: NODE_VERSION
-        value: "22"
-      # Fill these in on Render (Dashboard → Environment). Sandbox credentials only.
+      - key: GUARDIAN_URL
+        fromService:
+          type: web
+          name: sayitpayit-guardian
+          property: hostport
+      - key: GUARDIAN_API_KEY
+        fromService:
+          type: web
+          name: sayitpayit-guardian
+          envVarKey: GUARDIAN_API_KEY
+      # Fill these in when Render asks (sandbox credentials only).
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_SECRET
-        sync: false
-      - key: NEXT_PUBLIC_PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_WEBHOOK_ID
         sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GROQ_API_KEY
-        sync: false
-      - key: GUARDIAN_URL
-        sync: false
-      - key: GUARDIAN_API_KEY
         sync: false
       - key: APP_URL
         sync: false

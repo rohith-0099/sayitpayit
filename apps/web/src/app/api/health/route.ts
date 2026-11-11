@@ -1,6 +1,7 @@
 /** Liveness for the web app, plus a reachability check of the Guardian service. */
+import { guardianBase } from "@/lib/guardian-url";
 export async function GET() {
-  const guardianUrl = process.env.GUARDIAN_URL ?? "http://localhost:8000";
+  const guardianUrl = guardianBase();
   let guardian: "ok" | "down" = "down";
   try {
     const r = await fetch(`${guardianUrl}/health`, { signal: AbortSignal.timeout(2000) });

@@ -1,7 +1,8 @@
 import "server-only";
+import { guardianBase } from "./guardian-url";
 
 /** Thin client for the Guardian FastAPI service (services/guardian). */
-const base = () => process.env.GUARDIAN_URL ?? "http://localhost:8000";
+const base = guardianBase;
 const headers = () => (process.env.GUARDIAN_API_KEY ? { "X-Guardian-Key": process.env.GUARDIAN_API_KEY } : undefined);
 
 export class GuardianUnavailable extends Error {}

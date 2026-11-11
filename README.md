@@ -10,7 +10,7 @@ you confirm, by saying a fresh random phrase in your own voice.
 Built for the **PayPal AI Hackathon 2026**. Everything runs on the **PayPal sandbox**; no real money moves.
 
 - Demo video: _link added at submission_
-- Live app: _Render URL added at submission_ (Guardian's ML service runs on a free Hugging Face Space)
+- Live app: _Render URL added at submission_ (web app, Guardian ML service and Postgres all on Render)
 
 ## What it does
 
@@ -72,11 +72,25 @@ label for fee display; Payouts doesn't set it on PayPal's side.
 - **Our models**: a multilingual scam-command classifier we fine-tuned on a dataset we generated (1,600 commands, 8 languages, 10 scam tactics + hard negatives: `services/guardian/data/scam_commands.jsonl`, metrics in `docs/metrics/scam_classifier.json`), and Voice ID with SpeechBrain ECAPA.
 - **LangGraph.js**: the agent is a fixed graph, so Guardian and the confirmation are structural, not prompts.
 
-## Run it locally (about 5 minutes)
+## Run it locally
 
-You need Node 22+, Python 3.12 with [uv](https://docs.astral.sh/uv/), and Docker. Get free keys from
-[Google AI Studio](https://aistudio.google.com/) (Gemini) and [Groq](https://console.groq.com/), and a
-PayPal **sandbox** app (Payouts, Invoicing, Transaction Search and Vault enabled) from developer.paypal.com.
+Get free keys from [Google AI Studio](https://aistudio.google.com/) (Gemini) and [Groq](https://console.groq.com/),
+and a PayPal **sandbox** app (Payouts, Invoicing, Transaction Search and Vault enabled) from developer.paypal.com.
+
+### One command: the full stack (Docker)
+
+```bash
+cp .env.example apps/web/.env.local     # fill in the PayPal sandbox, Gemini and Groq keys
+docker compose --profile full up --build
+```
+
+Then open http://localhost:3000. This starts Postgres, the Guardian ML service (Voice ID, scam model, Kokoro
+voice) and the web app. The first build takes about 15 minutes, because it trains our scam classifier and
+downloads the voice models; later starts are quick.
+
+### Developer setup (hot reload)
+
+You need Node 22+, Python 3.12 with [uv](https://docs.astral.sh/uv/), and Docker.
 
 ```bash
 # 1. Database + web app
@@ -93,6 +107,10 @@ uv pip install --python .venv -r requirements.txt
 
 # 3. Open http://localhost:3000/link and link the sandbox PayPal below, then /voice to set up Voice ID.
 ```
+
+Hosting: `render.yaml` is a Render Blueprint for all three parts (web app, Guardian as a Docker service with
+2 GB, paid Postgres), with Guardian's URL and key wired between them automatically. If Guardian is
+unreachable, the app shows a lite-mode banner and keeps working on Guardian's built-in rules.
 
 Handy: `npm run demo:reset` (local retakes), `npm run test:guardian-flow` (Scam Interrupt end to end),
 `npm test` (web unit tests), `.venv/bin/python -m pytest` (Guardian).

@@ -61,9 +61,13 @@ async function HeaderWithUser() {
         <Link href="/dashboard" className="text-paper hover:text-signal">
           Dashboard
         </Link>
-        <Link href="/voice" className={voice ? "text-signal hover:brightness-110" : "text-amber hover:brightness-110"}>
-          {voice ? "Voice ID on" : "Set up Voice ID"}
-        </Link>
+        {process.env.LITE_MODE === "1" ? (
+          <span className="text-mist">Voice ID: local only</span>
+        ) : (
+          <Link href="/voice" className={voice ? "text-signal hover:brightness-110" : "text-amber hover:brightness-110"}>
+            {voice ? "Voice ID on" : "Set up Voice ID"}
+          </Link>
+        )}
         <Link href="/link" className="text-mist hover:text-paper">
           {user.paypalVaultId ? <>Paying from {user.paypalPayerEmail ?? "your PayPal"}</> : "Link your PayPal"}
         </Link>

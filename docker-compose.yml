@@ -1,4 +1,7 @@
-# Local development database. Production uses Render Postgres.
+# Local stack.
+#   docker compose up -d                      → just Postgres (for `npm run dev` + a local Guardian)
+#   docker compose --profile full up --build  → everything: Postgres + Guardian + web on :3000
+# The full profile reads your keys from apps/web/.env.local (copy .env.example there first).
 services:
   db:
     image: postgres:17-alpine
@@ -17,6 +20,36 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  guardian:
+    profiles: ["full"]
+    build: ./services/guardian
+    environment:
+      GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-}
+    ports:
+      - "8000:7860"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7860/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  web:
+    profiles: ["full"]
+    build: ./apps/web
+    env_file: ./apps/web/.env.local
+    environment:
+      DATABASE_URL: postgres://sayitpayit:sayitpayit_local@db:5432/sayitpayit
+      GUARDIAN_URL: http://guardian:7860
+      GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-}
+      APP_URL: http://localhost:3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      guardian:
+        condition: service_started
 
 volumes:
   pgdata:

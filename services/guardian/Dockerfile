@@ -1,4 +1,4 @@
-# Guardian on a free Hugging Face Space (Docker SDK, CPU basic: 2 vCPU / 16 GB RAM).
+# Guardian service image: Render (render.yaml, 1 CPU / 2 GB) or locally via docker compose --profile full.
 # Voice ID (ECAPA), AASIST-L, our scam classifier and Kokoro TTS, all CPU-only.
 FROM python:3.12-slim
 
@@ -22,5 +22,5 @@ RUN python training/scam_classifier.py --epochs 4 \
  && python -c "from app import tts; tts.warm('en'); tts.warm('es')"
 
 EXPOSE 7860
-# GUARDIAN_API_KEY must be set as a Space secret (the Space URL is public).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Render sets $PORT; locally (docker compose) it's 7860. GUARDIAN_API_KEY is required when hosted.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
