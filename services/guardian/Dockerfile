@@ -2,7 +2,8 @@
 # Voice ID (ECAPA), AASIST-L, our scam classifier and Kokoro TTS, all CPU-only.
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HF_HOME=/home/user/.cache/huggingface
+# HF_HUB_DISABLE_XET: plain HTTP downloads (the Xet transport failed mid-transfer on a test build).
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 HF_HOME=/home/user/.cache/huggingface HF_HUB_DISABLE_XET=1
 RUN useradd -m -u 1000 user
 WORKDIR /home/user/app
 
@@ -17,7 +18,8 @@ USER user
 # Bake the models into the image so a cold start doesn't download them:
 #  - train our scam classifier from the published dataset (~4 min on CPU)
 #  - fetch ECAPA (speaker), Kokoro (voice, en + es) once
-RUN python training/scam_classifier.py --epochs 4 \
+RUN python training/prefetch_models.py \
+ && python training/scam_classifier.py --epochs 4 \
  && python -c "from app.voice import speaker; speaker.load()" \
  && python -c "from app import tts; tts.warm('en'); tts.warm('es')"
 
