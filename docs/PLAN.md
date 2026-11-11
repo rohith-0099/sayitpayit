@@ -22,7 +22,7 @@ _Last updated: 2026-11-12._
   - No AG Studio license key: trial mode with watermark (email info@ag-grid.com for a trial key, set `AG_STUDIO`).
 - [ ] **Phase 10** Deploy. Prepared: `render.yaml` (web + free Postgres, migrate + seed on start), lite-mode banner when Guardian is unreachable, `services/guardian/Dockerfile` for a free HF Space (scam model trained at build), `scripts/deploy-guardian-hf.sh`. **Needs the user:** Render + HF accounts/secrets, push to GitHub, then `npm run webhook:setup -- <render-url>`. Render Workflows: not used (cut).
 - [x] **Phase 11** Judge-ready README: pitch, features, Mermaid architecture, how PayPal/AI are used, 5-minute setup, sandbox logins, limitations, credits. (Fresh-clone test not done.)
-- [ ] **Phase 12** Video + Devpost submission.
+- [ ] **Phase 12** Video + Devpost submission. Script: `docs/VIDEO_SCRIPT.md` (5 scenes, 2:50, tested commands).
 - [ ] **Stretch (only if time is left):** hands-free wake word ("Hey Pay").
 
 ### How to run locally
