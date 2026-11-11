@@ -37,7 +37,8 @@ Pretrained models, datasets, libraries and approaches this project uses, with th
 | [PaySim](https://www.kaggle.com/datasets/ealaxi/paysim1) (Lopez-Rojas et al.) | Training data for our risk model (Phase 6) | CC BY-SA 4.0 |
 | [Fraud Detection Handbook](https://github.com/fraud-detection-handbook/fraud-detection-handbook) | Approach for per-user behaviour features (Phase 6) | Approach only |
 | [NVIDIA Financial Fraud Detection Blueprint](https://build.nvidia.com/nvidia/financial-fraud-detection) | Approach for payee-graph features (Phase 6) | Approach only |
-| [AG Studio / AG Grid](https://www.ag-grid.com/studio/) + PayPal boilerplate | Money dashboard (Phase 9) | Per AG Grid license |
+| [AG Studio](https://www.ag-grid.com/studio/) 3.1 (`ag-studio`, `ag-studio-react`), AG Grid | Money dashboard, custom widgets, Studio AI agent (our Gemini adapter) | AG Studio: commercial (hackathon/trial); AG Grid community: MIT |
+| [PayPal + AG Studio hackathon boilerplate](https://github.com/paypaldev/hackathon-paypal-ag-grid-boilerplate) | Reference for wiring Studio (theme, data sources, AI harness); our code is written from it, not copied | No license stated |
 
 ## License
 

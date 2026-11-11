@@ -1,7 +1,7 @@
 # SayItPayIt — Build Plan
 
 ## Status (keep this current; a new session resumes from here)
-_Last updated: 2026-11-11._
+_Last updated: 2026-11-12._
 
 - [x] **Phase 0** Restructure: Next.js app, Guardian FastAPI, Docker Postgres.
 - [x] **Phase 1** PayPal core: payouts, invoices (+QR), orders, verified webhooks (real `INVOICING.INVOICE.PAID` received via tunnel).
@@ -18,7 +18,8 @@ _Last updated: 2026-11-11._
   - Not verified: the "safe answers → continue" branch (no legit test phrase scored high enough to trigger questions).
   - Cut (per plan order): passkey step-up. Family link is shown on screen ("in production by SMS"); no SMS/email sending.
 - [ ] **Phase 8** Smart invoice page `/i/[id]` (English) + friendly reminders.
-- [ ] **Phase 9** AG Studio dashboard + Insights agent.
+- [x] **Phase 9** AG Studio dashboard (`/dashboard`, ag-studio 3.1.0): our data sources (money activity, Guardian checks, who owes what), theme on our tokens, 3 custom widgets (Guardian shield gauge, Who owes what, Cross-border tracker) in Studio's widget menu, 2 pages, transaction grid with risk + decision. Studio's AI agent runs on **Gemini** via our adapter (`/api/ai/turn`); "Ask" (typed or voice) opens the AI panel and the agent builds widgets live. Verified: "Show what I sent Maria this month" → agent added + filtered + configured a chart (~90 s on free tier).
+  - No AG Studio license key: trial mode with watermark (email info@ag-grid.com for a trial key, set `AG_STUDIO`).
 - [ ] **Phase 10** Render deploy (web, Guardian, Postgres, Workflows) + production webhook.
 - [ ] **Phase 11** Judge-ready README, architecture diagram, fresh-clone test.
 - [ ] **Phase 12** Video + Devpost submission.

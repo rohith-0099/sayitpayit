@@ -23,6 +23,8 @@
     "@langchain/langgraph": "^1.7.1",
     "@langchain/langgraph-checkpoint-postgres": "^1.1.2",
     "@paypal/paypal-js": "^11.3.0",
+    "ag-studio": "^3.1.0",
+    "ag-studio-react": "^3.1.0",
     "drizzle-orm": "^0.45.4",
     "next": "16.4.5",
     "postgres": "^4.1.0",

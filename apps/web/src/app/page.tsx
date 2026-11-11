@@ -54,6 +54,9 @@ async function HeaderWithUser() {
   return (
     <Header>
       <nav className="flex items-center gap-6 text-sm">
+        <Link href="/dashboard" className="text-paper hover:text-signal">
+          Dashboard
+        </Link>
         <Link href="/voice" className={voice ? "text-signal hover:brightness-110" : "text-amber hover:brightness-110"}>
           {voice ? "Voice ID on" : "Set up Voice ID"}
         </Link>

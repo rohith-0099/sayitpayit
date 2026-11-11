@@ -8,6 +8,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { DEMO_USER } from "../src/lib/demo";
+import { quote } from "../src/lib/fees";
 import { fallbackRate, round2 } from "../src/lib/fx";
 import * as s from "../src/lib/db/schema";
 import { generateSeed, SEED_CONTACTS, SEED_TRUSTED_CONTACT, type ContactKey } from "../src/lib/seed/data";
@@ -88,6 +89,13 @@ async function main() {
           amount: t.amount.toFixed(2),
           currency: t.currency,
           homeAmount: t.homeAmount.toFixed(2),
+          // Same fee model as the live read-back (PayPal's published consumer fees).
+          fee:
+            t.type === "pay"
+              ? quote({ amount: t.amount, currency: t.currency, homeCurrency: "USD", rate: t.fxRate, category: c.relationship, senderCountry: "US", recipientCountry: c.country })
+                  .fees.reduce((a, x) => a + x.amount, 0)
+                  .toFixed(2)
+              : null,
           fxRate: String(t.fxRate),
           relationship: c.relationship,
           counterpartyEmail: c.paypalEmail,
