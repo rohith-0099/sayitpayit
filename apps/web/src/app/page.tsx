@@ -6,6 +6,7 @@ import { LiteModeBanner } from "@/components/LiteModeBanner";
 import { listActivity, listOutstanding } from "@/lib/payments/service";
 import { getCurrentUser } from "@/lib/users";
 import { getVoiceProfile } from "@/lib/voice";
+import { guardianConfigured } from "@/lib/guardian-url";
 
 const fmt = (amount: string | number, currency: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(amount));
@@ -61,7 +62,7 @@ async function HeaderWithUser() {
         <Link href="/dashboard" className="text-paper hover:text-signal">
           Dashboard
         </Link>
-        {process.env.LITE_MODE === "1" ? (
+        {!guardianConfigured() ? (
           <span className="text-mist">Voice ID: local only</span>
         ) : (
           <Link href="/voice" className={voice ? "text-signal hover:brightness-110" : "text-amber hover:brightness-110"}>

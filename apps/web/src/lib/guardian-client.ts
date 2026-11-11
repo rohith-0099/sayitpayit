@@ -1,5 +1,5 @@
 import "server-only";
-import { guardianBase } from "./guardian-url";
+import { guardianBase, guardianConfigured } from "./guardian-url";
 
 /** Thin client for the Guardian FastAPI service (services/guardian). */
 const base = guardianBase;
@@ -8,6 +8,7 @@ const headers = () => (process.env.GUARDIAN_API_KEY ? { "X-Guardian-Key": proces
 export class GuardianUnavailable extends Error {}
 
 async function post<T>(path: string, form: FormData, timeoutMs: number): Promise<T> {
+  if (!guardianConfigured()) throw new GuardianUnavailable("Guardian isn't configured (lite mode)");
   let r: Response;
   try {
     r = await fetch(`${base()}${path}`, { method: "POST", body: form, headers: headers(), signal: AbortSignal.timeout(timeoutMs) });
@@ -62,6 +63,7 @@ export interface ScamResult {
 
 /** Our fine-tuned multilingual scam classifier. Null when Guardian (or the model) is unavailable. */
 export async function classifyScam(text: string): Promise<ScamResult | null> {
+  if (!guardianConfigured()) return null;
   try {
     const r = await fetch(`${base()}/scam/classify`, {
       method: "POST",

@@ -1,12 +1,13 @@
 import { guardianOnline } from "@/lib/guardian-status";
+import { guardianConfigured } from "@/lib/guardian-url";
 
 /**
  * Lite mode: the Guardian ML service (Voice ID, scam-language model, natural voice) isn't reachable.
- * On the hosted demo (LITE_MODE=1) that's by design: it needs more memory than free hosting gives,
+ * With no GUARDIAN_URL (the free hosted demo) that's by design: it needs more memory than free hosting gives,
  * so it runs locally (docker compose --profile full up). Payments still pass Guardian's rules and your yes.
  */
 export async function LiteModeBanner() {
-  const hosted = process.env.LITE_MODE === "1";
+  const hosted = !guardianConfigured();
   if (!hosted && (await guardianOnline())) return null;
   return (
     <p role="status" className="rounded-2xl bg-amber/10 px-5 py-3 text-sm text-amber ring-1 ring-amber/30">

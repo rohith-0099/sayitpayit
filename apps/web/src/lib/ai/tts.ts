@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { requireEnv } from "../env";
-import { guardianBase } from "../guardian-url";
+import { guardianBase, guardianConfigured } from "../guardian-url";
 
 // Natural female voice for the agent.
 //  1. Kokoro-82M in the Guardian service (en, es, fr, hi, it, ja, pt, zh): fast, local, Apache-2.0.
@@ -39,6 +39,7 @@ export function pcmToWav(pcm: Buffer, sampleRate = 24000): Buffer {
 }
 
 async function kokoro(text: string, lang: string): Promise<Buffer | null> {
+  if (!guardianConfigured()) return null; // lite mode: Gemini TTS / browser voice
   const base = guardianBase();
   try {
     const r = await fetch(`${base}/tts`, {

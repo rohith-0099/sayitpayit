@@ -10,7 +10,7 @@ you confirm, by saying a fresh random phrase in your own voice.
 Built for the **PayPal AI Hackathon 2026**. Everything runs on the **PayPal sandbox**; no real money moves.
 
 - Demo video: _link added at submission_
-- Live app: _Render URL added at submission_ (web app, Guardian ML service and Postgres all on Render)
+- Live app (lite mode): _Render URL added at submission_. Full voice Guardian runs locally (see below and the video).
 
 ## What it does
 
@@ -108,9 +108,11 @@ uv pip install --python .venv -r requirements.txt
 # 3. Open http://localhost:3000/link and link the sandbox PayPal below, then /voice to set up Voice ID.
 ```
 
-Hosting: `render.yaml` is a Render Blueprint for all three parts (web app, Guardian as a Docker service with
-2 GB, paid Postgres), with Guardian's URL and key wired between them automatically. If Guardian is
-unreachable, the app shows a lite-mode banner and keeps working on Guardian's built-in rules.
+Hosting: the live demo runs free on Render (`render.yaml`, Singapore) with a free Neon Postgres, in
+**lite mode**: Guardian's ML service (Voice ID, scam model, natural voice) needs more memory than free hosting
+gives, so the hosted app uses Guardian's built-in rules, Gemini TTS or the browser voice, and shows a banner.
+Every payment there still goes through Guardian and waits for your yes. The full experience is the
+one-command Docker stack above (and the demo video).
 
 Handy: `npm run demo:reset` (local retakes), `npm run test:guardian-flow` (Scam Interrupt end to end),
 `npm test` (web unit tests), `.venv/bin/python -m pytest` (Guardian).

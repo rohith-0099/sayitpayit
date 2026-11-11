@@ -1,54 +1,29 @@
-# Render Blueprint: everything hosted (≈ $38/month, billed per second).
-#   sayitpayit           web app (Next.js)            0.5 CPU / 512 MB  ($7)
-#   sayitpayit-guardian  Guardian ML (Docker, Python)  1 CPU / 2 GB      ($25): Voice ID, scam model, Kokoro voice
-#   sayitpayit-db        Postgres                      0.1 CPU / 256 MB  ($6): paid, so it doesn't expire before judging
-# GUARDIAN_URL and GUARDIAN_API_KEY are wired automatically over Render's private network.
-# If Guardian is down, the web app falls back to lite mode (banner + Guardian's rules).
-databases:
-  - name: sayitpayit-db
-    plan: 0.1c-256mb
-    databaseName: sayitpayit
-    user: sayitpayit
-
+# Render Blueprint: free hosted demo (no card). One web service, lite mode.
+# - Database: Neon Postgres (free) — paste its *direct* connection string as DATABASE_URL.
+# - Guardian (Voice ID, scam model, natural voice) needs ~2 GB, so it isn't hosted: GUARDIAN_URL stays
+#   empty → lite mode (banner, Guardian's rules, Gemini/browser voice). Full stack locally:
+#   docker compose --profile full up --build
 services:
-  - type: web
-    name: sayitpayit-guardian
-    runtime: docker
-    plan: 1c-2g
-    dockerContext: ./services/guardian
-    dockerfilePath: ./services/guardian/Dockerfile
-    healthCheckPath: /health
-    envVars:
-      - key: GUARDIAN_API_KEY
-        generateValue: true
-
   - type: web
     name: sayitpayit
     runtime: node
-    plan: 0.5c-512mb
+    plan: free
+    region: singapore
     rootDir: apps/web
-    buildCommand: npm ci && npm run build
-    # Migrations + the deterministic demo seed run on every start (the seed only replaces its own rows).
-    startCommand: npm run db:migrate && npm run db:seed && npm run start
+    # Builds run on Render's build pipeline (2 CPU / 8 GB), so the build itself isn't memory-capped.
+    # Output is a standalone server with no browser sourcemaps, to stay small at runtime.
+    buildCommand: npm ci && npm run build:render
+    # Runtime fits the 512 MB instance: heap capped at 450 MB (measured peak ≈ 280 MB locally).
+    # Migrations, demo seed only if the DB is empty, then the standalone server.
+    startCommand: npm run start:render
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
       - key: DATABASE_URL
-        fromDatabase:
-          name: sayitpayit-db
-          property: connectionString
-      - key: GUARDIAN_URL
-        fromService:
-          type: web
-          name: sayitpayit-guardian
-          property: hostport
-      - key: GUARDIAN_API_KEY
-        fromService:
-          type: web
-          name: sayitpayit-guardian
-          envVarKey: GUARDIAN_API_KEY
-      # Fill these in when Render asks (sandbox credentials only).
+        sync: false
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_SECRET
@@ -61,5 +36,7 @@ services:
         sync: false
       - key: APP_URL
         sync: false
+      - key: GUARDIAN_URL
+        value: ""
       - key: AG_STUDIO
         sync: false

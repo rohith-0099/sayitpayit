@@ -42,3 +42,4 @@ next-env.d.ts
 
 # verification builds (npm run build:verify)
 /.next-verify/
+/.next-render/

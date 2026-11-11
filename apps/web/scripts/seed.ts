@@ -24,6 +24,14 @@ const client = postgres(process.env.DATABASE_URL, { max: 1 });
 const db = drizzle(client, { schema: s });
 
 async function main() {
+  // --if-empty (used on Render start): only seed a fresh database; never touch existing demo data.
+  if (process.argv.includes("--if-empty")) {
+    const existing = await db.select({ id: s.users.id }).from(s.users).where(eq(s.users.email, DEMO_USER.email)).limit(1);
+    if (existing.length) {
+      console.log("Demo data already present; skipping seed.");
+      return;
+    }
+  }
   const { txs, splits, events } = generateSeed();
 
   const summary = await db.transaction(async (q) => {
