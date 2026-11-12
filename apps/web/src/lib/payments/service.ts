@@ -16,6 +16,13 @@ import {
   type WebhookEvent,
 } from "../paypal";
 import { equalShares, interpretWebhook, payoutItemStatus } from "./logic";
+import { isPayPalCurrency } from "../paypal/currencies";
+
+/** Fail before charging anyone if PayPal can't move this currency (e.g. INR cross-border). */
+function assertCurrency(...codes: string[]) {
+  const bad = codes.find((c) => !isPayPalCurrency(c));
+  if (bad) throw new ApiError(422, `PayPal doesn't support ${bad} for this payment. Nothing was charged.`, { code: "CURRENCY_NOT_SUPPORTED" });
+}
 
 const { transactions, splits, splitMembers, invoices, contacts, webhookEvents } = schema;
 
@@ -70,6 +77,7 @@ export async function executePay(user: User, input: PayInput) {
   if (!user.paypalVaultId) {
     throw new ApiError(409, "Link your PayPal first: open /link and approve SayItPayIt once.", { code: "PAYPAL_NOT_LINKED" });
   }
+  assertCurrency(input.currency, user.homeCurrency);
   const party = partyFields(input.to);
   const home = await homeValue(user, input.amount, input.currency);
   const [tx] = await db
@@ -187,6 +195,7 @@ export interface RequestInput {
 }
 
 export async function createRequest(user: User, input: RequestInput) {
+  assertCurrency(input.currency);
   const party = partyFields(input.from);
   // Invoices, invoice emails and our invoice page are always in English.
   const language = "en";

@@ -28,6 +28,8 @@ async function main() {
   if (process.argv.includes("--if-empty")) {
     const existing = await db.select({ id: s.users.id }).from(s.users).where(eq(s.users.email, DEMO_USER.email)).limit(1);
     if (existing.length) {
+      // One-off fix for databases seeded before the demo user moved to India time.
+      await db.update(s.users).set({ timezone: DEMO_USER.timezone }).where(and(eq(s.users.email, DEMO_USER.email), eq(s.users.timezone, "America/New_York")));
       console.log("Demo data already present; skipping seed.");
       return;
     }
@@ -39,7 +41,7 @@ async function main() {
     const [user] = await q
       .insert(s.users)
       .values({ ...DEMO_USER })
-      .onConflictDoUpdate({ target: s.users.email, set: { name: DEMO_USER.name } })
+      .onConflictDoUpdate({ target: s.users.email, set: { name: DEMO_USER.name, timezone: DEMO_USER.timezone } })
       .returning();
 
     // 2. Clear previous seed rows (+ Phase 1 rows that failed before Invoicing was enabled)

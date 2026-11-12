@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Readback, StepId } from "@/lib/agent/graph";
 import type { AgentEvent, PublicView } from "@/lib/agent/run";
-import { fileToDataUrl, postStream, speak, stopSpeaking, transcribeAudio } from "./client";
+import { fileToDataUrl, isMuted, postStream, primeAudio, setMuted, speak, stopSpeaking, transcribeAudio } from "./client";
 import { GuardianPanel } from "./GuardianPanel";
 import { HoldCard, QuestionCard } from "./InterruptCards";
 import { ReadbackCard } from "./ReadbackCard";
@@ -26,6 +26,27 @@ const LANGS = [
 
 const EXAMPLES = ["Pay Maria 50 euros for the logo", "Ask John for 200 dollars for the website", "Págale a María 30 euros por el logo"];
 
+const DONE_LABEL: Record<string, string> = {
+  pay: "Paid",
+  request: "Requested",
+  split: "Invoices sent",
+  cancel_invoice: "Invoice cancelled",
+  add_contact: "Contact added",
+  set_guardian: "Guardian updated",
+};
+
+/** The browser's IANA time zone (Guardian's "unusual hour" check uses the user's clock). */
+const timeZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+};
+
+/** Tell the activity list below to reload. */
+const activityChanged = () => window.dispatchEvent(new Event("sip:activity"));
+
 export function VoiceAgent({ linked }: { linked: boolean }) {
   const router = useRouter();
   const [lang, setLang] = useState("auto");
@@ -39,6 +60,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const [receipt, setReceipt] = useState<string | null>(null);
   const [question, setQuestion] = useState<{ text: string; index: number; total: number } | null>(null);
   const [holdInfo, setHoldInfo] = useState<{ contactName: string; url: string; reason: string } | null>(null);
+  const [muted, setMutedState] = useState(false);
   /** What the agent is waiting on, so errors can return there. */
   const waiting = useRef<Waiting>("confirm");
   const thread = useRef<string | null>(null);
@@ -48,9 +70,15 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const listenForAnswer = useRef<() => void>(() => {});
 
   useEffect(() => {
-    const saved = localStorage.getItem("sip-lang");
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- restore a saved preference once on mount
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("sip-lang");
+    } catch {
+      /* storage blocked */
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restore saved preferences once on mount
     if (saved) setLang(saved);
+    setMutedState(isMuted());
   }, []);
 
   const onEvent = useCallback(
@@ -65,7 +93,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         setHoldInfo(null);
         setQuestion({ text: e.question, index: e.index, total: e.total });
         setPhase("question");
-        void speak(e.question, e.view.language).then(() => {
+        void speak(e.say, e.view.language).then(() => {
           if (spokenCommand.current) {
             mode.current = "answer";
             listenForAnswer.current();
@@ -78,7 +106,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         setQuestion(null);
         setHoldInfo({ contactName: e.contactName, url: e.url, reason: e.reason });
         setPhase("hold");
-        void speak(e.reason, e.view.language);
+        void speak(e.say, e.view.language);
       } else if (e.type === "confirm") {
         waiting.current = "confirm";
         setView(e.view);
@@ -87,7 +115,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         setHoldInfo(null);
         setReadback({ readback: e.readback, reask: e.reask, note: e.note });
         setPhase("confirm");
-        void speak(e.note ?? e.readback.spoken, e.view.language).then(() => {
+        void speak(e.say, e.view.language).then(() => {
           // Hands-free: after a spoken command, listen for the yes/no right away.
           if (spokenCommand.current) {
             mode.current = "answer";
@@ -101,8 +129,9 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         setQuestion(null);
         setHoldInfo(null);
         setPhase("final");
-        if (e.view.reply) void speak(e.view.reply.text, e.view.language);
-        router.refresh(); // activity list below
+        if (e.say) void speak(e.say, e.view.language);
+        activityChanged(); // the Recent / Waiting on lists below
+        router.refresh();
       } else if (e.type === "error") {
         setError(e.message);
         setPhase(thread.current ? waiting.current : "idle");
@@ -123,7 +152,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       setSteps({ listening: { status: "done", title: source === "voice" ? "Heard you" : "Typed" }, understood: { status: "active" } });
       setPhase("thinking");
       try {
-        await postStream("/api/agent", { text, source, language, image: receipt, voiceCheckId }, onEvent);
+        await postStream("/api/agent", { text, source, language, image: receipt, voiceCheckId, timeZone: timeZone(), speak: !isMuted() }, onEvent);
         setReceipt(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -140,7 +169,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
       setError(null);
       setPhase("answering");
       try {
-        await postStream(`/api/agent/${thread.current}`, { answer: text, voiceCheckId }, onEvent);
+        await postStream(`/api/agent/${thread.current}`, { answer: text, voiceCheckId, speak: !isMuted() }, onEvent);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Something went wrong.");
         setPhase(waiting.current);
@@ -189,6 +218,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const micBusy = phase === "transcribing" || phase === "thinking" || phase === "answering";
   const toggleMic = () => {
     if (recorder.recording) return recorder.stop();
+    primeAudio();
     stopSpeaking();
     mode.current = phase === "confirm" || phase === "question" || phase === "hold" ? "answer" : "command";
     if (mode.current === "command") {
@@ -203,6 +233,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const submitTyped = (e: React.FormEvent) => {
     e.preventDefault();
     if (!typed.trim() && !receipt) return;
+    primeAudio();
     spokenCommand.current = false;
     const text = typed.trim();
     setTyped("");
@@ -210,7 +241,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
     else void runCommand(text, "text", null);
   };
 
-  const doneLabel = view?.intent?.kind === "request" ? "Requested" : view?.intent?.kind === "split" ? "Invoices sent" : "Paid";
+  const doneLabel = DONE_LABEL[view?.intent?.kind ?? "pay"] ?? "Done";
   const result = view?.result;
 
   return (
@@ -276,6 +307,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
             busy={phase === "answering"}
             listening={recorder.recording && phase === "confirm"}
             onYes={() => {
+              primeAudio();
               recorder.cancel();
               mode.current = "command";
               void answer("yes");
@@ -305,6 +337,24 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                     Open the PayPal invoice
                   </a>
                 )}
+              </div>
+            )}
+            {!!view.suggestions?.length && (
+              <div className="mt-5 flex flex-wrap gap-3">
+                {view.suggestions.map((sug) => (
+                  <button
+                    key={sug}
+                    type="button"
+                    onClick={() => {
+                      primeAudio();
+                      spokenCommand.current = false;
+                      void runCommand(sug, "text", null);
+                    }}
+                    className="rounded-full bg-paper px-5 py-2.5 font-bold text-ink hover:brightness-95"
+                  >
+                    {sug}
+                  </button>
+                ))}
               </div>
             )}
           </section>
@@ -404,6 +454,19 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                aria-pressed={muted}
+                onClick={() => {
+                  const m = !muted;
+                  setMuted(m);
+                  setMutedState(m);
+                  if (!m) primeAudio();
+                }}
+                className={`ml-3 rounded-md px-2 py-0.5 ring-1 transition ${muted ? "text-amber ring-amber/40" : "text-paper ring-line hover:ring-mist"}`}
+              >
+                {muted ? "Voice off" : "Voice on"}
+              </button>
             </p>
           </div>
         </div>

@@ -10,6 +10,7 @@ import { getRate, round2 } from "../fx";
 import { equalShares } from "../payments/logic";
 import { createRequest, createSplit, executePay, type Party } from "../payments/service";
 import { listContacts, resolveRecipient } from "../users";
+import { normalizeName } from "../contacts-match";
 import { consumeVoiceCheck, getVoiceProfile, makeChallenge } from "../voice";
 import { classifyAnswer, type Answer } from "./answers";
 import { linkGuardianEvent, runGuardian, type GuardianResult } from "./guardian";
@@ -18,6 +19,9 @@ import { localize, localizeCard } from "./language";
 import { assessAnswers, writeQuestions } from "./interview";
 import { cancelHold, openHold } from "../holds";
 import { resolveLanguage } from "./lang";
+import { addContact, cancelOpenInvoice, findContactConflict, getTrustedContact, listOpenInvoices, pickInvoices, setTrustedContact } from "../actions";
+import { currencyName, isPayPalCurrency } from "../paypal/currencies";
+import { spokenMoney } from "../spoken";
 
 // ---------------------------------------------------------------------------
 // Flow (fixed order; Guardian and Confirm can never be skipped):
@@ -43,8 +47,12 @@ export interface Step {
 /** Serializable reference to a counterparty (checkpoint-safe). */
 type PartyRef = { contactId: string; name: string } | { email: string; name: string };
 
+/** Actions that never move money (still read back and confirmed with a yes). */
+export type AdminKind = "cancel_invoice" | "add_contact" | "set_guardian";
+export const isAdmin = (k: string): k is AdminKind => k === "cancel_invoice" || k === "add_contact" || k === "set_guardian";
+
 export interface Plan {
-  kind: "pay" | "request" | "split";
+  kind: "pay" | "request" | "split" | AdminKind;
   party?: PartyRef; // pay / request
   members?: { party: PartyRef; share: number }[]; // split
   myShare?: number;
@@ -56,6 +64,13 @@ export interface Plan {
   title?: string; // split title (English, used on invoices)
   recipientCountry?: string;
   category?: "friends_family" | "business";
+  /** cancel_invoice: our transaction row for the invoice. */
+  invoiceTxId?: string;
+  /** add_contact */
+  newContact?: { nickname: string; fullName: string | null; email: string; relationship: "family" | "friend" | "business"; currency: string; country: string };
+  /** add_contact: also make them the Guardian contact. set_guardian: who. */
+  makeGuardian?: boolean;
+  guardianTarget?: { name: string; email: string; relation: string; language: string; replaces: string | null };
 }
 
 export interface Readback {
@@ -77,6 +92,8 @@ export interface AgentInput {
   voiceCheckId?: string | null;
   /** Structured intent (e.g. /api/pay) skips the LLM but NOT Guardian or Confirm. */
   intent?: Intent | null;
+  /** The user's IANA time zone from the browser (Guardian's "unusual hour" check). */
+  timeZone?: string | null;
 }
 
 export interface AgentResult {
@@ -124,7 +141,10 @@ const State = Annotation.Root({
   confirmAttempts: Annotation<number>({ reducer: merge, default: () => 0 }),
   result: Annotation<AgentResult | null>({ reducer: merge, default: () => null }),
   outcome: Annotation<"done" | "needs_info" | "cancelled" | "blocked" | "error" | null>({ reducer: merge, default: () => null }),
-  reply: Annotation<{ text: string } | null>({ reducer: merge, default: () => null }),
+  /** text = shown on screen; say = the short line spoken aloud. */
+  reply: Annotation<{ text: string; say?: string } | null>({ reducer: merge, default: () => null }),
+  /** Follow-up commands offered as buttons (e.g. the same payment in a supported currency). */
+  suggestions: Annotation<string[] | null>({ reducer: merge, default: () => null }),
   steps: Annotation<Partial<Record<StepId, Step>>>({
     reducer: (a, b) => ({ ...a, ...b }),
     default: () => ({}),
@@ -162,6 +182,30 @@ export const money = (amount: number, currency: string, lang = "en") =>
 const titleCase = (s: string) =>
   s === s.toUpperCase() ? s.toLowerCase().replace(/(^|[\s'-])(\p{L})/gu, (_, a, b) => a + b.toUpperCase()) : s;
 
+/** Spoken money for the TTS line ("fifty cents"), symbols for the screen. */
+const S = spokenMoney;
+
+/**
+ * A reply in the user's language: `english` for the screen, `sayEnglish` (one short sentence)
+ * for the voice. Both are translated when the user isn't speaking English.
+ */
+async function replyIn(english: string, language: string, sayEnglish?: string): Promise<{ text: string; say: string }> {
+  if (!language || language === "en") return { text: english, say: sayEnglish ?? english };
+  if (!sayEnglish) {
+    const t = await localize(english, language);
+    return { text: t, say: t };
+  }
+  const [text, say] = await Promise.all([localize(english, language), localize(sayEnglish, language)]);
+  return { text, say };
+}
+
+/** "Okay, I didn't send anything." / "...didn't change anything." */
+const nothingDone = (plan: Plan | null) =>
+  plan && isAdmin(plan.kind) ? "Okay, I didn't change anything." : "Okay, I didn't send anything.";
+
+const isEmail = (s: string | null | undefined): s is string => !!s && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** Resolve one spoken name; returns a question for the user when it can't. */
 async function resolveOne(userId: string, name: string) {
   const r = await resolveRecipient(userId, name);
@@ -185,15 +229,26 @@ async function understand(s: AgentState): Promise<Partial<AgentState>> {
   const language = resolveLanguage({ text: s.input.text, llm: intent.language, whisper: s.input.source === "voice" ? s.input.language : null });
 
   if (intent.kind === "unknown") {
-    const text = await localize(`I can send money, ask for money, or split a bill. Try: "Pay Maria 50 euros for the logo."`, language);
-    return { intent, receipt, language, outcome: "needs_info", reply: { text }, steps: { understood: { status: "warn", title: "Not a payment", detail: s.input.text } } };
+    const reply = await replyIn(`I can send money, ask for money, split a bill, cancel an invoice or add a contact. Try: "Pay Maria 50 euros for the logo."`, language, "I can pay, request or split money for you. Try again?");
+    return { intent, receipt, language, outcome: "needs_info", reply, steps: { understood: { status: "warn", title: "Not something I can do", detail: s.input.text } } };
   }
-  if (intent.clarification || (intent.kind !== "split" && (!intent.recipient || !intent.amount)) || (intent.kind === "split" && (!intent.members.length || !(intent.amount ?? receipt?.total)))) {
-    const text = intent.clarification ?? (await localize("Who should I pay, and how much?", language));
-    return { intent, receipt, language, outcome: "needs_info", reply: { text }, steps: { understood: { status: "warn", title: "Need a detail", detail: text } } };
+  const missing =
+    intent.kind === "split" ? !intent.members.length || !(intent.amount ?? receipt?.total)
+    : intent.kind === "cancel_invoice" ? !intent.recipient && !intent.amount
+    : intent.kind === "add_contact" ? !intent.recipient || !intent.email
+    : intent.kind === "set_guardian" ? !intent.recipient
+    : !intent.recipient || !intent.amount;
+  if (intent.clarification || missing) {
+    const fallback = {
+      cancel_invoice: "Which invoice should I cancel? Say who it was for.",
+      add_contact: intent.recipient ? `What's ${intent.recipient}'s PayPal email?` : "What's their name and PayPal email?",
+      set_guardian: "Who should be your Guardian contact?",
+    }[intent.kind as AdminKind] ?? "Who should I pay, and how much?";
+    const text = intent.clarification ?? (await localize(fallback, language));
+    return { intent, receipt, language, outcome: "needs_info", reply: { text, say: text }, steps: { understood: { status: "warn", title: "Need a detail", detail: text } } };
   }
   const who = intent.kind === "split" ? intent.members.join(", ") : intent.recipient;
-  const verb = { pay: "Pay", request: "Request from", split: "Split with" }[intent.kind];
+  const verb = { pay: "Pay", request: "Request from", split: "Split with", cancel_invoice: "Cancel invoice for", add_contact: "Add contact", set_guardian: "Make Guardian:" }[intent.kind];
   return {
     intent,
     receipt,
@@ -202,8 +257,9 @@ async function understand(s: AgentState): Promise<Partial<AgentState>> {
       listening: { status: "done" },
       understood: {
         status: "done",
-        title: `${verb} ${who}`,
+        title: `${verb} ${who ?? "an invoice"}`,
         detail: [
+          intent.kind === "add_contact" ? intent.email : null,
           (intent.amount ?? receipt?.total) ? money((intent.amount ?? receipt!.total)!, intent.currency ?? receipt?.currency ?? user.homeCurrency, language) : null,
           intent.note ?? (receipt?.merchant ? titleCase(receipt.merchant) : null),
         ].filter(Boolean).join(" · "),
@@ -212,13 +268,54 @@ async function understand(s: AgentState): Promise<Partial<AgentState>> {
   };
 }
 
+/**
+ * PayPal can't move every currency (e.g. INR cross-border). Catch it before anyone is charged and
+ * offer the same amount in currencies PayPal does support.
+ */
+async function unsupportedCurrency(
+  s: AgentState,
+  user: User,
+  o: { kind: "pay" | "request" | "split"; name: string; amount: number; currency: string; alt: string[] },
+): Promise<Partial<AgentState> | null> {
+  if (isPayPalCurrency(o.currency)) return null;
+  const options: { amount: number; currency: string }[] = [];
+  for (const cur of [...new Set(o.alt)].filter((c) => c !== o.currency && isPayPalCurrency(c))) {
+    try {
+      const { rate } = await getRate(o.currency, cur);
+      options.push({ amount: Math.max(0.01, round2(o.amount * rate)), currency: cur });
+    } catch {
+      /* no rate: skip this option */
+    }
+  }
+  const asked = money(o.amount, o.currency);
+  const offer = options.length ? ` ${asked} is about ${options.map((x) => money(x.amount, x.currency)).join(" or ")}. Want me to use that instead?` : " Try US dollars or euros instead.";
+  const english = `PayPal can't ${o.kind === "pay" ? "send" : "invoice in"} ${currencyName(o.currency)} (${o.currency}), so ${o.kind === "pay" ? "I didn't charge you anything" : "I didn't send anything"}.${offer}`;
+  const sayEn = `PayPal can't ${o.kind === "pay" ? "send" : "invoice in"} ${currencyName(o.currency)}, so nothing was ${o.kind === "pay" ? "charged" : "sent"}; want ${options.length ? options.map((x) => currencyName(x.currency)).join(" or ") : "US dollars"} instead?`;
+  const verb = o.kind === "pay" ? `Pay ${o.name}` : o.kind === "request" ? `Ask ${o.name} for` : `Split`;
+  const suggestions =
+    o.kind === "split"
+      ? []
+      : options.map((x) => `${verb} ${x.amount.toFixed(x.currency === "JPY" ? 0 : 2)} ${x.currency}${s.intent?.noteEn ? ` for ${s.intent.noteEn}` : ""}`);
+  void user;
+  return {
+    outcome: "needs_info",
+    reply: await replyIn(english, s.language, sayEn),
+    suggestions,
+    steps: { understood: { status: "warn", title: `${o.currency} isn't supported by PayPal`, detail: options.length ? `Try ${options.map((x) => x.currency).join(" or ")}` : undefined } },
+  };
+}
+
 async function resolve(s: AgentState): Promise<Partial<AgentState>> {
   const user = await loadUser(s.userId);
   const intent = s.intent!;
-  const fail = async (q: string): Promise<Partial<AgentState>> => {
-    const text = await localize(q, s.language);
-    return { outcome: "needs_info", reply: { text }, steps: { understood: { status: "warn", title: "Need a detail", detail: text } } };
+  const fail: Fail = async (q, sayQ) => {
+    const reply = await replyIn(q, s.language, sayQ);
+    return { outcome: "needs_info", reply, steps: { understood: { status: "warn", title: "Need a detail", detail: reply.text } } };
   };
+
+  if (intent.kind === "cancel_invoice") return resolveCancel(s, user, fail);
+  if (intent.kind === "add_contact") return resolveAddContact(s, user, fail);
+  if (intent.kind === "set_guardian") return resolveSetGuardian(s, user, fail);
 
   if (intent.kind === "split") {
     const total = intent.amount ?? s.receipt?.total ?? 0;
@@ -229,6 +326,8 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
       if ("ask" in r) return fail(r.ask!);
       refs.push(r.ref);
     }
+    const bad = await unsupportedCurrency(s, user, { kind: "split", name: "", amount: total, currency, alt: [user.homeCurrency, "USD", "EUR"] });
+    if (bad) return bad;
     const includeMe = intent.includeMe !== false;
     const shares = equalShares(total, refs.length + (includeMe ? 1 : 0));
     const memberShares = includeMe ? shares.slice(1) : shares;
@@ -242,6 +341,8 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
   const r = await resolveOne(user.id, intent.recipient!);
   if ("ask" in r) return fail(r.ask!);
   const currency = intent.currency ?? (kind === "pay" ? (r.contact?.currency ?? user.homeCurrency) : user.homeCurrency);
+  const bad = await unsupportedCurrency(s, user, { kind, name: r.ref.name, amount: intent.amount!, currency, alt: [user.homeCurrency, r.contact?.currency ?? user.homeCurrency] });
+  if (bad) return bad;
   return {
     plan: {
       kind,
@@ -254,6 +355,110 @@ async function resolve(s: AgentState): Promise<Partial<AgentState>> {
       category: r.contact?.relationship ?? "friends_family",
     },
     steps: { understood: { status: "done", title: `${{ pay: "Pay", request: "Request from" }[kind]} ${r.ref.name}`, detail: `${money(intent.amount!, currency, s.language)}${intent.note ? ` · ${intent.note}` : ""}` } },
+  };
+}
+
+type Fail = (q: string, sayEnglish?: string) => Promise<Partial<AgentState>>;
+
+/** Find the open invoice the user wants cancelled. Never guesses between several. */
+async function resolveCancel(s: AgentState, user: User, fail: Fail): Promise<Partial<AgentState>> {
+  const intent = s.intent!;
+  let who: { contactId?: string | null; email?: string | null; name?: string | null } = {};
+  if (intent.recipient) {
+    const r = await resolveRecipient(user.id, intent.recipient);
+    if (r.kind === "exact") who = { contactId: r.contact.id, email: r.contact.paypalEmail };
+    else if (r.kind === "new_email") who = { email: r.email };
+    else if (r.kind === "ambiguous") return fail(`Which ${intent.recipient} do you mean: ${r.candidates.map((c) => c.fullName ?? c.nickname).join(" or ")}?`);
+    else who = { name: intent.recipient };
+  }
+  const open = await listOpenInvoices(user.id);
+  const rows = pickInvoices(open, who, intent.amount, intent.currency);
+  const label = intent.recipient ?? "anyone";
+  if (rows.length === 0) {
+    const cur = intent.currency ?? user.homeCurrency;
+    const theirs = intent.amount ? pickInvoices(open, who, null, null) : [];
+    if (theirs.length) {
+      const list = theirs.slice(0, 3).map(({ tx }) => `${money(Number(tx.amount), tx.currency)}${tx.note ? ` for ${tx.note}` : ""}`);
+      return fail(
+        `I couldn't find a ${money(intent.amount!, cur)} invoice for ${label}. Their unpaid ${theirs.length === 1 ? "invoice is" : "invoices are"}: ${list.join("; ")}. Say which amount to cancel.`,
+        `I couldn't find a ${S(intent.amount!, cur)} invoice for ${label}; the open ones are on screen.`,
+      );
+    }
+    return fail(
+      `I couldn't find an unpaid invoice for ${label}${intent.amount ? ` for ${money(intent.amount, cur)}` : ""}. Nothing to cancel.`,
+      `I couldn't find an unpaid invoice for ${label}${intent.amount ? ` for ${S(intent.amount, cur)}` : ""}.`,
+    );
+  }
+  if (rows.length > 1) {
+    const list = rows.slice(0, 3).map(({ tx, nickname }) => `${money(Number(tx.amount), tx.currency)}${intent.recipient ? "" : ` to ${nickname ?? tx.counterpartyName}`}${tx.note ? ` for ${tx.note}` : ""}`);
+    return fail(`${cap(label)} has ${rows.length} unpaid invoices: ${list.join("; ")}. Which one should I cancel? Say the amount.`, `${cap(label)} has ${rows.length} unpaid invoices. Which amount should I cancel?`);
+  }
+  const { tx, nickname } = rows[0];
+  const name = nickname ?? tx.counterpartyName ?? tx.counterpartyEmail;
+  const party: PartyRef = tx.contactId ? { contactId: tx.contactId, name } : { email: tx.counterpartyEmail, name };
+  return {
+    plan: { kind: "cancel_invoice", party, amount: Number(tx.amount), currency: tx.currency, note: tx.note, noteEn: tx.note, invoiceTxId: tx.id },
+    steps: { understood: { status: "done", title: `Cancel ${name}'s invoice`, detail: `${money(Number(tx.amount), tx.currency, s.language)}${tx.note ? ` · ${tx.note}` : ""}` } },
+  };
+}
+
+async function resolveAddContact(s: AgentState, user: User, fail: Fail): Promise<Partial<AgentState>> {
+  const intent = s.intent!;
+  const fullName = intent.recipient!.trim().replace(/\s+/g, " ");
+  const nickname = cap(fullName.split(" ")[0]);
+  if (!isEmail(intent.email)) return fail(`I didn't catch a valid email for ${nickname}. Say it again, like "${nickname.toLowerCase()} at example dot com".`);
+  const conflict = await findContactConflict(user.id, nickname, intent.email);
+  if (conflict?.field === "name") return fail(`You already have a contact called ${conflict.contact.nickname} (${conflict.contact.paypalEmail}).`);
+  if (conflict?.field === "email") return fail(`That email is already saved as ${conflict.contact.nickname}.`);
+  const relationship = intent.relationship ?? "friend";
+  return {
+    plan: {
+      kind: "add_contact",
+      amount: 0,
+      currency: user.homeCurrency,
+      note: null,
+      noteEn: null,
+      newContact: { nickname, fullName: fullName.includes(" ") ? fullName.replace(/\b\p{L}/gu, (c) => c.toUpperCase()) : null, email: intent.email, relationship, currency: user.homeCurrency, country: user.country },
+      makeGuardian: !!intent.makeGuardian,
+      ...(intent.makeGuardian
+        ? { guardianTarget: { name: fullName, email: intent.email, relation: relationship === "business" ? "trusted contact" : relationship, language: user.language, replaces: (await getTrustedContact(user.id))?.name ?? null } }
+        : {}),
+    },
+    steps: { understood: { status: "done", title: `Add ${nickname}`, detail: `${intent.email} · ${relationship}` } },
+  };
+}
+
+async function resolveSetGuardian(s: AgentState, user: User, fail: Fail): Promise<Partial<AgentState>> {
+  const intent = s.intent!;
+  const current = await getTrustedContact(user.id);
+  const r = await resolveRecipient(user.id, intent.recipient!);
+  let target: { name: string; email: string; relation: string; language: string; ref: PartyRef };
+  if (r.kind === "exact") {
+    const c = r.contact;
+    target = { name: c.fullName ?? c.nickname, email: c.paypalEmail, relation: c.relationship === "business" ? "trusted contact" : "family", language: c.language, ref: { contactId: c.id, name: c.nickname } };
+  } else if (r.kind === "new_email") {
+    target = { name: r.email, email: r.email, relation: "trusted contact", language: user.language, ref: { email: r.email, name: r.email } };
+  } else if (r.kind === "ambiguous") {
+    return fail(`Which ${intent.recipient} do you mean: ${r.candidates.map((c) => c.fullName ?? c.nickname).join(" or ")}?`);
+  } else if (current && normalizeName(current.name).split(/\s+/).includes(normalizeName(intent.recipient!))) {
+    return { outcome: "needs_info", reply: await replyIn(`${current.name} is already your Guardian contact.`, s.language), steps: { understood: { status: "done", title: "Already your Guardian", detail: current.name } } };
+  } else {
+    return fail(`I don't have ${intent.recipient}'s email yet. Say: "Add ${intent.recipient}, their email, and make them my guardian."`);
+  }
+  if (current && current.email.toLowerCase() === target.email.toLowerCase()) {
+    return { outcome: "needs_info", reply: await replyIn(`${current.name} is already your Guardian contact.`, s.language), steps: { understood: { status: "done", title: "Already your Guardian", detail: current.name } } };
+  }
+  return {
+    plan: {
+      kind: "set_guardian",
+      party: target.ref,
+      amount: 0,
+      currency: user.homeCurrency,
+      note: null,
+      noteEn: null,
+      guardianTarget: { name: target.name, email: target.email, relation: target.relation, language: target.language, replaces: current?.name ?? null },
+    },
+    steps: { understood: { status: "done", title: `Make ${target.ref.name} your Guardian`, detail: target.email } },
   };
 }
 
@@ -290,16 +495,16 @@ async function voiceGate(s: AgentState): Promise<Partial<AgentState>> {
 async function guardian(s: AgentState): Promise<Partial<AgentState>> {
   const user = await loadUser(s.userId);
   const plan = s.plan!;
-  const name = plan.party?.name ?? plan.members!.map((m) => m.party.name).join(", ");
+  const name = plan.party?.name ?? plan.members?.map((m) => m.party.name).join(", ") ?? plan.newContact?.nickname ?? "";
   const email = plan.party && "email" in plan.party ? plan.party.email : plan.party ? ((await loadContact((plan.party as { contactId: string }).contactId))?.paypalEmail ?? "") : "";
   const { rate } = await getRate(plan.currency, user.homeCurrency);
-  const g = await runGuardian({ user, kind: plan.kind, counterpartyEmail: email, counterpartyName: name, homeAmount: round2(plan.amount * rate), command: s.input.text, voice: s.voice });
+  const g = await runGuardian({ user, kind: plan.kind, counterpartyEmail: email, counterpartyName: name, homeAmount: round2(plan.amount * rate), command: s.input.text, voice: s.voice, timeZone: s.input.timeZone });
 
   const status: StepStatus = g.decision === "ALLOW" ? "done" : g.decision === "BLOCK" ? "error" : "warn";
   const title = { ALLOW: "Looks safe", ASK_QUESTIONS: "Needs a closer look", GUARDIAN_HOLD: "Held for family approval", PASSKEY_REQUIRED: "Extra check needed", BLOCK: "Stopped" }[g.decision];
   if (g.decision === "BLOCK") {
-    const text = await localize(`I stopped this payment. ${g.explanation} I didn't send anything.`, s.language);
-    return { guardian: g, outcome: "blocked", reply: { text }, steps: { guardian: { status, title, detail: g.explanation }, done: { status: "error", title: "Not sent" } } };
+    const reply = await replyIn(`I stopped this payment. ${g.explanation} I didn't send anything.`, s.language, "I stopped this payment, and nothing was sent.");
+    return { guardian: g, outcome: "blocked", reply, steps: { guardian: { status, title, detail: g.explanation }, done: { status: "error", title: "Not sent" } } };
   }
   return { guardian: g, steps: { guardian: { status, title, detail: `Risk ${Math.round(g.riskScore * 100)} out of 100` } } };
 }
@@ -316,7 +521,7 @@ const CATEGORY_LABELS: Record<string, Record<"friends_family" | "business", stri
 /** "Pay Maria €500.00 (gift cards)" for prompts and the family summary. */
 function describe(plan: Plan): string {
   const who = plan.party?.name ?? plan.members?.map((m) => m.party.name).join(", ") ?? "someone";
-  const verb = { pay: "pay", request: "ask", split: "split a bill with" }[plan.kind];
+  const verb = { pay: "pay", request: "ask", split: "split a bill with", cancel_invoice: "cancel the invoice for", add_contact: "add the contact", set_guardian: "make Guardian contact" }[plan.kind];
   return `${verb} ${who} ${money(plan.amount, plan.currency)}${plan.noteEn ? ` (${plan.noteEn})` : ""}`;
 }
 
@@ -334,8 +539,8 @@ async function interview(s: AgentState): Promise<Partial<AgentState>> {
     const r = interrupt<{ type: "question"; index: number; total: number; question: string }, { answer: string }>({ type: "question", index: i, total: qs.length, question: q });
     const a = (r?.answer ?? "").trim();
     if (/^(cancel|stop|cancela|para)\b/i.test(a)) {
-      const text = await localize("Okay, I've cancelled it. Nothing was sent.", s.language);
-      return { outcome: "cancelled", reply: { text }, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
+      const reply = await replyIn("Okay, I've cancelled it. Nothing was sent.", s.language);
+      return { outcome: "cancelled", reply, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
     }
     qa.push({ q, a: a || "(no answer)" });
   }
@@ -378,11 +583,11 @@ async function hold(s: AgentState, config: LangGraphRunnableConfig): Promise<Par
   }
   if (r?.decision === "cancelled") {
     await cancelHold(threadId);
-    const text = await localize("Okay, I've cancelled it. Nothing was sent.", s.language);
-    return { hold: { status: "cancelled", contactName, url }, outcome: "cancelled", reply: { text }, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
+    const reply = await replyIn("Okay, I've cancelled it. Nothing was sent.", s.language);
+    return { hold: { status: "cancelled", contactName, url }, outcome: "cancelled", reply, steps: { guardian: { status: "skipped", title: "Cancelled" }, done: { status: "skipped", title: "Not sent" } } };
   }
-  const text = await localize(`${contactName} stopped this payment. Nothing was sent, and your money is safe.`, s.language);
-  return { hold: { status: "denied", contactName, url }, outcome: "blocked", reply: { text }, steps: { guardian: { status: "error", title: `${contactName} stopped it` }, done: { status: "error", title: "Not sent" } } };
+  const reply = await replyIn(`${contactName} stopped this payment. Nothing was sent, and your money is safe.`, s.language, `${contactName} stopped this payment, and your money is safe.`);
+  return { hold: { status: "denied", contactName, url }, outcome: "blocked", reply, steps: { guardian: { status: "error", title: `${contactName} stopped it` }, done: { status: "error", title: "Not sent" } } };
 }
 
 /** Build the read-back. Kept separate from `confirm` because interrupted nodes re-run on resume. */
@@ -411,8 +616,13 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
         ...(plan.note ? [{ label: "For", value: plan.note }] : []),
       ],
       notes: quote.notes,
-      spoken: `Sending ${name} ${receives}${plan.note ? ` for ${plan.note}` : ""}. You pay ${total}${feeText}. ${quote.categoryLabel}. Shall I send it?`,
+      // One short sentence for the ear; the card shows fees, rate and type.
+      spoken:
+        quote.converted || quote.fees.length
+          ? `Send ${name} ${S(quote.recipientReceives.amount, quote.recipientReceives.currency)}${plan.note ? ` for ${plan.note}` : ""}, ${S(quote.total, quote.homeCurrency)} in total?`
+          : `Send ${name} ${S(quote.recipientReceives.amount, quote.recipientReceives.currency)}${plan.note ? ` for ${plan.note}` : ""}?`,
     };
+    void feeText;
   } else if (plan.kind === "request") {
     const name = plan.party!.name;
     const amt = money(plan.amount, plan.currency, L);
@@ -423,7 +633,46 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
         ...(plan.note ? [{ label: "For", value: plan.note }] : []),
       ],
       notes: ["I'll send a PayPal invoice with a QR code (in English). Nothing leaves your account; they pay with PayPal or a card."],
-      spoken: `Asking ${name} for ${amt}${plan.note ? ` for ${plan.note}` : ""}. I'll send a PayPal invoice with a QR code. Shall I send it?`,
+      spoken: `Ask ${name} for ${S(plan.amount, plan.currency)}${plan.note ? ` for ${plan.note}` : ""}?`,
+    };
+  } else if (plan.kind === "cancel_invoice") {
+    const name = plan.party!.name;
+    readback = {
+      title: `Cancel ${name}'s invoice`,
+      lines: [
+        { label: "Invoice to", value: name },
+        { label: "Amount", value: money(plan.amount, plan.currency, L), emphasis: true },
+        ...(plan.note ? [{ label: "For", value: plan.note }] : []),
+      ],
+      notes: ["PayPal cancels the invoice and tells them they don't need to pay it. No money moves."],
+      spoken: `Cancel ${name}'s invoice for ${S(plan.amount, plan.currency)}?`,
+    };
+  } else if (plan.kind === "add_contact") {
+    const c = plan.newContact!;
+    readback = {
+      title: `Add ${c.nickname}`,
+      lines: [
+        { label: "Name", value: c.fullName ?? c.nickname, emphasis: true },
+        { label: "PayPal email", value: c.email },
+        { label: "Relationship", value: cap(c.relationship) },
+        { label: "Currency", value: c.currency },
+        ...(plan.makeGuardian ? [{ label: "Guardian contact", value: plan.guardianTarget?.replaces ? `Yes (replaces ${plan.guardianTarget.replaces})` : "Yes" }] : []),
+      ],
+      notes: plan.makeGuardian ? [`${c.nickname} will get a link to approve or stop risky payments.`] : ["Saved contacts can be paid by name."],
+      spoken: `Add ${c.nickname} as a ${c.relationship === "business" ? "business" : c.relationship} contact${plan.makeGuardian ? " and your Guardian" : ""}?`,
+    };
+  } else if (plan.kind === "set_guardian") {
+    const t = plan.guardianTarget!;
+    const name = plan.party!.name;
+    readback = {
+      title: `Make ${name} your Guardian`,
+      lines: [
+        { label: "Guardian contact", value: t.name, emphasis: true },
+        { label: "Email", value: t.email },
+        ...(t.replaces ? [{ label: "Replaces", value: t.replaces }] : []),
+      ],
+      notes: [`When Guardian pauses a risky payment, ${name} gets a link to approve or stop it.`],
+      spoken: `Make ${name} your trusted Guardian?`,
     };
   } else {
     const per = plan.members!.map((m) => `${m.party.name} ${money(m.share, plan.currency, L)}`).join(", ");
@@ -435,8 +684,14 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
         ...(plan.myShare ? [{ label: "Your share", value: money(plan.myShare, plan.currency, L) }] : []),
       ],
       notes: ["Each person gets their own PayPal invoice. I'll tell you when they pay."],
-      spoken: `Splitting ${money(plan.amount, plan.currency, L)}: ${per}. I'll send each of them an invoice. Shall I send them?`,
+      spoken: (() => {
+        const names = plan.members!.map((m) => m.party.name);
+        const who = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+        const same = plan.members!.every((m) => m.share === plan.members![0].share);
+        return `Split ${S(plan.amount, plan.currency)} with ${who}${same ? `, ${S(plan.members![0].share, plan.currency)} each` : ""}?`;
+      })(),
     };
+    void per;
   }
 
   if (s.hold?.status === "approved") {
@@ -445,15 +700,16 @@ async function prepare(s: AgentState): Promise<Partial<AgentState>> {
     readback.notes.unshift("Guardian: thanks for answering the questions.");
   } else if (s.guardian && s.guardian.decision !== "ALLOW") {
     readback.notes.unshift(`Guardian: ${s.guardian.explanation}`);
-    readback.spoken = `Before you answer: ${s.guardian.explanation} ${readback.spoken}`;
   }
+  const warn = s.guardian && s.guardian.decision !== "ALLOW" && s.hold?.status !== "approved" && s.interview?.verdict !== "safe";
   // Money leaving an enrolled user's account needs a fresh random phrase, said in their voice.
   // A recording can't contain a phrase that didn't exist yet, so this defeats replay.
   let challenge: string | null = null;
   if (plan.kind === "pay" && s.voice?.enrolled) {
     challenge = makeChallenge(L === "es" ? "es" : "en");
-    readback.spoken = readback.spoken.replace(/Shall I send it\?$/, `To send it, say: "${challenge}".`);
+    readback.spoken = `To send ${plan.party!.name} ${S(plan.amount, plan.currency)}, say: "${challenge}".`;
   }
+  if (warn) readback.spoken = `Heads up, this looks unusual. ${readback.spoken}`;
   readback = await localizeCard(readback, L);
   readback.challenge = challenge;
   return {
@@ -482,13 +738,13 @@ async function confirm(s: AgentState, config: LangGraphRunnableConfig): Promise<
     answer: "no",
     confirmAttempts: attempts,
     outcome,
-    reply: { text: await localize(english, s.language) },
+    reply: await replyIn(english, s.language),
     steps: { confirm: { status: outcome === "blocked" ? "error" : "skipped", title: outcome === "blocked" ? "Voice didn't match" : "Cancelled" }, done: { status: outcome === "blocked" ? "error" : "skipped", title: "Not sent" } },
     ...extra,
   });
   const again = async (english: string, extra: Partial<AgentState> = {}): Promise<Partial<AgentState>> =>
     attempts >= 3
-      ? cancel("Okay, I didn't send anything.", "cancelled", extra)
+      ? cancel(nothingDone(s.plan), "cancelled", extra)
       : {
           answer: "unclear",
           confirmAttempts: attempts,
@@ -497,7 +753,7 @@ async function confirm(s: AgentState, config: LangGraphRunnableConfig): Promise<
           ...extra,
         };
 
-  if (said === "no") return cancel("Okay, I didn't send anything.");
+  if (said === "no") return cancel(nothingDone(s.plan));
 
   if (!s.challenge) {
     if (said === "yes") return { answer: "yes", confirmAttempts: attempts, confirmNote: null, steps: { confirm: { status: "done", title: "You said yes" } } };
@@ -530,7 +786,29 @@ async function execute(s: AgentState): Promise<Partial<AgentState>> {
   try {
     let result: AgentResult;
     let english: string;
-    if (plan.kind === "pay") {
+    let sayEn: string | undefined;
+    if (plan.kind === "cancel_invoice") {
+      const tx = await cancelOpenInvoice(user, plan.invoiceTxId!);
+      result = { kind: plan.kind, transactionIds: [tx.id], status: tx.status };
+      english = `Cancelled. ${plan.party!.name}'s invoice for ${money(plan.amount, plan.currency, L)} is void, and PayPal let them know.`;
+      sayEn = `Done, I cancelled ${plan.party!.name}'s invoice.`;
+    } else if (plan.kind === "add_contact") {
+      const c = plan.newContact!;
+      await addContact(user, { nickname: c.nickname, fullName: c.fullName, email: c.email, relationship: c.relationship === "business" ? "business" : "friends_family", currency: c.currency, country: c.country, language: user.language });
+      if (plan.makeGuardian && plan.guardianTarget) {
+        const t = plan.guardianTarget;
+        await setTrustedContact(user.id, { name: c.fullName ?? c.nickname, email: t.email, relation: t.relation, language: t.language });
+      }
+      result = { kind: plan.kind, transactionIds: [], status: "saved" };
+      english = `Added ${c.nickname} (${c.email}) to your contacts${plan.makeGuardian ? ", and made them your Guardian contact" : ""}.`;
+      sayEn = `Added ${c.nickname}${plan.makeGuardian ? " as your Guardian" : ""}.`;
+    } else if (plan.kind === "set_guardian") {
+      const t = plan.guardianTarget!;
+      await setTrustedContact(user.id, { name: t.name, email: t.email, relation: t.relation, language: t.language });
+      result = { kind: plan.kind, transactionIds: [], status: "saved" };
+      english = `${plan.party!.name} is now your Guardian contact. Risky payments will wait for their approval.`;
+      sayEn = `Done, ${plan.party!.name} is now your Guardian.`;
+    } else if (plan.kind === "pay") {
       const q = s.quote!;
       const tx = await executePay(user, {
         to: await toParty(plan.party!),
@@ -545,10 +823,12 @@ async function execute(s: AgentState): Promise<Partial<AgentState>> {
       });
       result = { kind: "pay", transactionIds: [tx.id], status: tx.status };
       english = `Done. ${plan.party!.name} is getting ${money(plan.amount, plan.currency, L)}.`;
+      sayEn = `Done, ${plan.party!.name} is getting ${S(plan.amount, plan.currency)}.`;
     } else if (plan.kind === "request") {
       const r = await createRequest(user, { from: await toParty(plan.party!), amount: plan.amount, currency: plan.currency, note: plan.noteEn ?? undefined, item: plan.noteEn ?? undefined, command: s.input.text, source: s.input.source, guardian: g });
       result = { kind: "request", transactionIds: [r.transaction.id], status: r.transaction.status, payUrl: r.invoice.payerViewUrl, qr: r.invoice.qrDataUrl };
       english = `Sent. ${plan.party!.name} has a PayPal invoice for ${money(plan.amount, plan.currency, L)}.`;
+      sayEn = `Sent, ${plan.party!.name} has the invoice.`;
     } else {
       const members = [];
       for (const m of plan.members!) members.push({ party: await toParty(m.party), amount: m.share });
@@ -557,19 +837,19 @@ async function execute(s: AgentState): Promise<Partial<AgentState>> {
       result = { kind: "split", transactionIds: ok.map((m) => m.transaction.id), status: ok.length === r.members.length ? "sent" : "partial" };
       english = ok.length === r.members.length ? `Sent ${ok.length} invoices. I'll let you know when they pay.` : `Sent ${ok.length} of ${r.members.length} invoices; some failed.`;
     }
-    if (s.guardian.eventId && result.transactionIds[0]) await linkGuardianEvent(s.guardian.eventId, result.transactionIds[0]);
-    const title = { pay: "Paid", request: "Requested", split: "Invoices sent" }[plan.kind];
-    const text = await localize(english, L);
-    return { result, outcome: "done", reply: { text }, steps: { done: { status: "done", title, detail: text } } };
+    if (s.guardian.eventId && result.transactionIds[0] && !isAdmin(plan.kind)) await linkGuardianEvent(s.guardian.eventId, result.transactionIds[0]);
+    const title = { pay: "Paid", request: "Requested", split: "Invoices sent", cancel_invoice: "Invoice cancelled", add_contact: "Contact added", set_guardian: "Guardian updated" }[plan.kind];
+    const reply = await replyIn(english, L, sayEn);
+    return { result, outcome: "done", reply, steps: { done: { status: "done", title, detail: reply.text } } };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const text = await localize(`That didn't go through: ${msg}`, L);
-    return { outcome: "error", reply: { text }, steps: { done: { status: "error", title: "Didn't go through", detail: msg } } };
+    const reply = await replyIn(`That didn't go through: ${msg}`, L, "Sorry, that didn't go through. The details are on screen.");
+    return { outcome: "error", reply, steps: { done: { status: "error", title: "Didn't go through", detail: msg } } };
   }
 }
 
 async function respond(s: AgentState): Promise<Partial<AgentState>> {
-  return s.reply ? {} : { reply: { text: await localize("Okay.", s.language) } };
+  return s.reply ? {} : { reply: await replyIn("Okay.", s.language) };
 }
 
 // ---------- graph ----------

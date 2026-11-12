@@ -4,6 +4,7 @@ import { ApiError } from "../errors";
 import { classifyAnswer } from "./answers";
 import { getAgent, type AgentInput, type AgentState, type Readback } from "./graph";
 import type { Intent } from "./intent";
+import { prefetchSpeech } from "../ai/tts";
 
 /** Build a structured intent (skips the LLM, never Guardian or Confirm). */
 export const structuredIntent = (i: Pick<Intent, "kind"> & Partial<Intent>): Intent => ({
@@ -19,17 +20,18 @@ export const structuredIntent = (i: Pick<Intent, "kind"> & Partial<Intent>): Int
   ...i,
 });
 
+// `say` on each event is the one short line the agent speaks (the screen shows the details).
 export type AgentEvent =
   | { type: "thread"; threadId: string }
   | { type: "update"; node: string; steps: AgentState["steps"] }
-  | { type: "confirm"; threadId: string; readback: Readback; reask: boolean; note: string | null; view: PublicView }
-  | { type: "question"; threadId: string; question: string; index: number; total: number; view: PublicView }
-  | { type: "hold"; threadId: string; contactName: string; url: string; reason: string; view: PublicView }
-  | { type: "final"; threadId: string; view: PublicView }
+  | { type: "confirm"; threadId: string; readback: Readback; reask: boolean; note: string | null; view: PublicView; say: string }
+  | { type: "question"; threadId: string; question: string; index: number; total: number; view: PublicView; say: string }
+  | { type: "hold"; threadId: string; contactName: string; url: string; reason: string; view: PublicView; say: string }
+  | { type: "final"; threadId: string; view: PublicView; say: string }
   | { type: "error"; message: string; code?: string };
 
 /** What the browser may see (no vault ids, no raw PayPal tokens). */
-export type PublicView = Pick<AgentState, "language" | "intent" | "receipt" | "voice" | "quote" | "readback" | "result" | "outcome" | "reply" | "steps" | "interview"> & {
+export type PublicView = Pick<AgentState, "language" | "intent" | "receipt" | "voice" | "quote" | "readback" | "result" | "outcome" | "reply" | "steps" | "interview" | "suggestions"> & {
   guardian: Omit<NonNullable<AgentState["guardian"]>, "eventId"> | null;
 };
 
@@ -53,6 +55,7 @@ const view = (s: AgentState): PublicView => ({
   reply: s.reply,
   steps: s.steps,
   interview: s.interview,
+  suggestions: s.suggestions,
 });
 
 type Pending = { type: "confirm"; readback: Readback; reask: boolean; note: string | null } | { type: "question"; question: string; index: number; total: number } | { type: "hold"; contactName: string; url: string; reason: string };
@@ -60,10 +63,13 @@ type Pending = { type: "confirm"; readback: Readback; reask: boolean; note: stri
 /** The event that describes where a conversation is now (paused or finished). */
 function stateEvent(threadId: string, state: AgentState, pending: Pending | undefined): AgentEvent {
   const v = view(state);
-  if (!pending) return { type: "final", threadId, view: v };
-  if (pending.type === "question") return { type: "question", threadId, question: pending.question, index: pending.index, total: pending.total, view: v };
-  if (pending.type === "hold") return { type: "hold", threadId, contactName: pending.contactName, url: pending.url, reason: pending.reason, view: v };
-  return { type: "confirm", threadId, readback: pending.readback, reask: pending.reask, note: pending.note ?? null, view: v };
+  if (!pending) return { type: "final", threadId, view: v, say: v.reply?.say ?? v.reply?.text ?? "" };
+  if (pending.type === "question") return { type: "question", threadId, question: pending.question, index: pending.index, total: pending.total, view: v, say: pending.question };
+  if (pending.type === "hold") {
+    const say = v.language === "en" ? `I've paused this payment and asked ${pending.contactName} to approve it.` : pending.reason;
+    return { type: "hold", threadId, contactName: pending.contactName, url: pending.url, reason: pending.reason, view: v, say };
+  }
+  return { type: "confirm", threadId, readback: pending.readback, reask: pending.reask, note: pending.note ?? null, view: v, say: pending.note ?? pending.readback.spoken };
 }
 
 /** Current state of a conversation (the UI polls this while waiting for the family's decision). */
@@ -87,6 +93,8 @@ export async function* runAgent(opts: {
   voiceCheckId?: string | null;
   /** The trusted contact's decision (authorised by the hold token, not the user's session). */
   familyDecision?: "approved" | "denied";
+  /** The browser will speak the reply: start generating its audio before sending the event. */
+  speak?: boolean;
 }): AsyncGenerator<AgentEvent> {
   const agent = await getAgent();
   const config = { configurable: { thread_id: opts.threadId } };
@@ -124,7 +132,9 @@ export async function* runAgent(opts: {
   }
 
   const snap = await agent.getState(config);
-  yield stateEvent(opts.threadId, snap.values as AgentState, snap.tasks.flatMap((t) => t.interrupts ?? [])[0]?.value as Pending | undefined);
+  const event = stateEvent(opts.threadId, snap.values as AgentState, snap.tasks.flatMap((t) => t.interrupts ?? [])[0]?.value as Pending | undefined);
+  if (opts.speak && "say" in event) prefetchSpeech(event.say, event.view.language);
+  yield event;
 }
 
 /** Stream AgentEvents as Server-Sent Events. Errors become an `error` event. */

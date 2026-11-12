@@ -47,9 +47,41 @@ export async function transcribeAudio(blob: Blob, language: string, opts: { kind
 
 const BCP47: Record<string, string> = { en: "en-US", es: "es-ES", ml: "ml-IN", ta: "ta-IN", de: "de-DE", hi: "hi-IN", fr: "fr-FR" };
 
-/** Split into sentences so the first one can start playing while the rest are generated. */
-export function sentences(text: string): string[] {
-  return (text.match(/[^.!?¿¡।]+[.!?।]+["”»)]*|[^.!?।]+$/gu) ?? [text]).map((s) => s.trim()).filter(Boolean);
+// ---------- The agent's voice ----------
+
+let muted = false;
+const MUTE_KEY = "sip-mute";
+
+export function isMuted() {
+  try {
+    muted = localStorage.getItem(MUTE_KEY) === "1";
+  } catch {
+    /* storage blocked: keep the in-memory value */
+  }
+  return muted;
+}
+
+export function setMuted(m: boolean) {
+  muted = m;
+  try {
+    localStorage.setItem(MUTE_KEY, m ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  if (m) stopSpeaking();
+}
+
+let ctx: AudioContext | null = null;
+function audioCtx(): AudioContext | null {
+  if (typeof window === "undefined" || !("AudioContext" in window)) return null;
+  ctx ??= new AudioContext();
+  return ctx;
+}
+
+/** Call from a click/tap so audio can play later without the browser blocking it. */
+export function primeAudio() {
+  const c = audioCtx();
+  if (c && c.state === "suspended") void c.resume();
 }
 
 let current: { stop: () => void } | null = null;
@@ -74,51 +106,104 @@ function browserSpeak(text: string, lang: string): Promise<void> {
   });
 }
 
-async function fetchSentence(text: string, lang: string, signal: AbortSignal): Promise<string | null> {
-  try {
-    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, lang }), signal });
-    return r.ok ? URL.createObjectURL(await r.blob()) : null;
-  } catch {
-    return null;
-  }
+/** 16-bit little-endian PCM → float samples. */
+function pcm16ToFloat(bytes: Uint8Array): Float32Array {
+  const n = bytes.length >> 1;
+  const out = new Float32Array(n);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, n * 2);
+  for (let i = 0; i < n; i++) out[i] = view.getInt16(i * 2, true) / 32768;
+  return out;
 }
 
 /**
- * Speak with the agent's voice (Kokoro / Gemini TTS via /api/tts), sentence by sentence:
- * sentence N plays while N+1 is fetched. Falls back to the browser voice if TTS is unavailable.
- * Resolves when done (or when interrupted by stopSpeaking()).
+ * Speak one short line with the agent's voice (/api/tts: Kokoro locally, Gemini when hosted).
+ * Gemini audio is streamed and played chunk by chunk as it arrives, so speech starts in about a
+ * second. One request per line (free-tier TTS quotas are per request). Falls back to the browser
+ * voice if no engine is available. Resolves when done, interrupted, or muted.
  */
 export async function speak(text: string, lang: string): Promise<void> {
   stopSpeaking();
-  if (typeof window === "undefined" || !text) return;
-  const parts = sentences(text);
-  const ctrl = new AbortController();
+  if (typeof window === "undefined" || !text || isMuted()) return;
+  const ac = new AbortController();
+  const sources: AudioBufferSourceNode[] = [];
   let stopped = false;
-  let audio: HTMLAudioElement | null = null;
-  current = {
+  let finish: () => void = () => {};
+  const me = {
     stop: () => {
       stopped = true;
-      ctrl.abort();
-      audio?.pause();
+      ac.abort();
+      for (const src of sources) {
+        try {
+          src.stop();
+        } catch {
+          /* not started */
+        }
+      }
+      finish();
     },
   };
-  let next = fetchSentence(parts[0], lang, ctrl.signal);
-  for (let i = 0; i < parts.length && !stopped; i++) {
-    const url = await next;
-    if (i + 1 < parts.length) next = fetchSentence(parts[i + 1], lang, ctrl.signal);
-    if (stopped) break;
-    if (!url) {
-      await browserSpeak(parts.slice(i).join(" "), lang);
-      break;
+  current = me;
+  try {
+    const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, lang }), signal: ac.signal });
+    const c = audioCtx();
+    if (!r.ok || !r.body || !c) {
+      if (!stopped) await browserSpeak(text, lang);
+      return;
     }
-    await new Promise<void>((resolve) => {
-      audio = new Audio(url);
-      audio.onended = audio.onerror = audio.onpause = () => resolve();
-      audio.play().catch(() => resolve());
-    });
-    URL.revokeObjectURL(url);
+    if (c.state === "suspended") await c.resume().catch(() => {});
+    const type = r.headers.get("content-type") ?? "";
+    const done = new Promise<void>((res) => (finish = res));
+    let end = c.currentTime + 0.08;
+    const play = (buf: AudioBuffer) => {
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.connect(c.destination);
+      const at = Math.max(end, c.currentTime + 0.02);
+      src.start(at);
+      end = at + buf.duration;
+      sources.push(src);
+      return src;
+    };
+
+    if (type.startsWith("audio/pcm")) {
+      const rate = Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000);
+      const reader = r.body.getReader();
+      let carry: Uint8Array | null = null;
+      let last: AudioBufferSourceNode | null = null;
+      for (;;) {
+        const { value, done: eof } = await reader.read();
+        if (eof || stopped) break;
+        let bytes: Uint8Array = value;
+        if (carry) {
+          const joined = new Uint8Array(carry.length + bytes.length);
+          joined.set(carry);
+          joined.set(bytes, carry.length);
+          bytes = joined;
+          carry = null;
+        }
+        if (bytes.length % 2) {
+          carry = bytes.slice(-1);
+          bytes = bytes.subarray(0, bytes.length - 1);
+        }
+        if (!bytes.length) continue;
+        const samples = pcm16ToFloat(bytes);
+        const buf = c.createBuffer(1, samples.length, rate);
+        buf.getChannelData(0).set(samples);
+        last = play(buf);
+      }
+      if (!last || stopped) return;
+      last.onended = () => finish();
+    } else {
+      const buf = await c.decodeAudioData(await r.arrayBuffer());
+      if (stopped) return;
+      play(buf).onended = () => finish();
+    }
+    await done;
+  } catch {
+    // aborted (stopSpeaking) or decode failure
+  } finally {
+    if (current === me) current = null;
   }
-  if (current && !stopped) current = null;
 }
 
 /** Downscale a photo to ≤1600px JPEG data URL (keeps Gemini vision fast). */

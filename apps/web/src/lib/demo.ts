@@ -6,5 +6,5 @@ export const DEMO_USER = {
   homeCurrency: "USD",
   language: "en",
   country: "US",
-  timezone: "America/New_York",
+  timezone: "Asia/Kolkata",
 } as const;

@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { guardianOnline } from "@/lib/guardian-status";
 import { guardianConfigured } from "@/lib/guardian-url";
 
@@ -7,6 +8,7 @@ import { guardianConfigured } from "@/lib/guardian-url";
  * so it runs locally (docker compose --profile full up). Payments still pass Guardian's rules and your yes.
  */
 export async function LiteModeBanner() {
+  await connection(); // checks Guardian per request (uses the clock), never at prerender
   const hosted = !guardianConfigured();
   if (!hosted && (await guardianOnline())) return null;
   return (

@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { classifyScam } from "../guardian-client";
 import type { User } from "../db/schema";
+import { localHour, validTimeZone } from "../time";
 
 export type Decision = "ALLOW" | "ASK_QUESTIONS" | "GUARDIAN_HOLD" | "PASSKEY_REQUIRED" | "BLOCK";
 
@@ -25,12 +26,14 @@ export interface GuardianResult {
 
 export interface GuardianInput {
   user: User;
-  kind: "pay" | "request" | "split";
+  kind: "pay" | "request" | "split" | "cancel_invoice" | "add_contact" | "set_guardian";
   counterpartyEmail: string;
   counterpartyName: string;
   homeAmount: number;
   command: string;
   voice?: { status: string; spoofSuspect?: boolean | null } | null;
+  /** The user's IANA time zone (from their browser). Falls back to the profile's. */
+  timeZone?: string | null;
 }
 
 // Fallback scam cues, used only when the Guardian service (our classifier) is unreachable.
@@ -75,7 +78,8 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     }
     if (input.homeAmount >= 1000) signals.push({ id: "large_amount", label: "Large amount", weight: W.large });
 
-    const hour = Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hourCycle: "h23", timeZone: user.timezone }).format(new Date()));
+    // The user's own clock (browser time zone, else their profile), never the server's UTC.
+    const hour = localHour(validTimeZone(input.timeZone) ?? validTimeZone(user.timezone) ?? "Asia/Kolkata");
     if (hour >= 0 && hour < 5) signals.push({ id: "odd_hour", label: "Unusual time of night for you", weight: W.oddHour });
   }
 
@@ -97,7 +101,9 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
 
   // Scam language: our fine-tuned multilingual classifier in the Guardian service (Phase 6).
   // If Guardian is unreachable, fall back to local keyword cues so a check still happens.
-  const model = await classifyScam(input.command);
+  // Admin actions (cancel an invoice, add a contact, change the Guardian contact) move no money.
+  const admin = input.kind === "cancel_invoice" || input.kind === "add_contact" || input.kind === "set_guardian";
+  const model = admin ? null : await classifyScam(input.command);
   let scamScore: number;
   let cueCount: number;
   if (model) {
@@ -106,7 +112,7 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     if (scamScore >= 0.5) signals.push({ id: "scam_language", label: `Sounds like a known scam (${Math.round(scamScore * 100)}% match)`, weight: Math.min(0.7, scamScore * 0.7) });
     for (const c of model.signals) signals.push({ id: c.id, label: c.label, weight: scamScore >= 0.5 ? 0.15 : 0.05 });
   } else {
-    const cues = SCAM_CUES.filter((c) => c.re.test(input.command));
+    const cues = admin ? [] : SCAM_CUES.filter((c) => c.re.test(input.command));
     for (const c of cues) signals.push({ id: c.id, label: c.label, weight: W.scamCue });
     scamScore = Math.min(1, cues.length * 0.35);
     cueCount = cues.length;
@@ -128,7 +134,9 @@ export async function runGuardian(input: GuardianInput): Promise<GuardianResult>
     signals.length === 0
       ? input.kind === "pay"
         ? `Normal payment to someone you pay regularly.`
-        : `Asking for money doesn't move any of yours, so this is low risk.`
+        : admin
+          ? `No money moves, so this is low risk.`
+          : `Asking for money doesn't move any of yours, so this is low risk.`
       : decision === "ALLOW"
         ? `Looks OK. Noted: ${signals.map((s) => s.label.toLowerCase()).join("; ")}.`
         : decision === "BLOCK"
