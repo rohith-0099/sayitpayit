@@ -1,5 +1,6 @@
 "use client";
 
+import { motion, MotionConfig } from "motion/react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Readback, StepId } from "@/lib/agent/graph";
@@ -46,6 +47,50 @@ const timeZone = () => {
 
 /** Tell the activity list below to reload. */
 const activityChanged = () => window.dispatchEvent(new Event("sip:activity"));
+
+/** The user's words, revealed one by one as they land (motion answers the user speaking). */
+function Spoken({ text }: { text: string }) {
+  const words = text.split(/\s+/);
+  return (
+    <p className="font-display text-4xl leading-[1.1] font-semibold tracking-tight text-balance sm:text-5xl" aria-label={`“${text}”`}>
+      {words.map((w, i) => (
+        <motion.span
+          key={`${text}-${i}`}
+          aria-hidden
+          initial={{ opacity: 0, y: "0.35em", filter: "blur(6px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ delay: Math.min(i * 0.045, 0.9), duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+          className="inline-block whitespace-pre"
+        >
+          {(i === 0 ? "“" : "") + w + (i === words.length - 1 ? "”" : " ")}
+        </motion.span>
+      ))}
+    </p>
+  );
+}
+
+/** Drawn tick / cross for the result. */
+function ResultMark({ outcome }: { outcome: string | null | undefined }) {
+  const ok = outcome === "done";
+  const bad = outcome === "blocked" || outcome === "error";
+  const color = ok ? "var(--color-signal)" : bad ? "var(--color-coral)" : "var(--color-mist)";
+  return (
+    <svg aria-hidden viewBox="0 0 48 48" className="size-14 shrink-0">
+      <motion.circle cx="24" cy="24" r="21" fill="none" stroke={color} strokeWidth="3" initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.5, ease: "easeOut" }} />
+      <motion.path
+        d={ok ? "M15 24.5l6 6 12-13" : bad ? "M17 17l14 14M31 17L17 31" : "M16 24h16"}
+        fill="none"
+        stroke={color}
+        strokeWidth="3.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ delay: 0.4, duration: 0.35, ease: "easeOut" }}
+      />
+    </svg>
+  );
+}
 
 export function VoiceAgent({ linked }: { linked: boolean }) {
   const router = useRouter();
@@ -245,18 +290,19 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
   const result = view?.result;
 
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
+    <MotionConfig reducedMotion="user">
+    <div className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
       {/* The conversation */}
       <div className="flex min-w-0 flex-col gap-8">
         <div className="min-h-[9rem]" aria-live="polite" data-testid="transcript">
           {transcript ? (
-            <p className="font-display text-4xl leading-[1.1] font-semibold tracking-tight text-balance sm:text-5xl">&ldquo;{transcript}&rdquo;</p>
+            <Spoken text={transcript} />
           ) : (
             <div>
-              <p className="font-display text-4xl leading-[1.1] font-semibold tracking-tight text-paper/40 sm:text-5xl">Say who to pay, and how much.</p>
+              <p className="font-display text-4xl leading-[1.1] font-semibold tracking-tight text-paper/45 sm:text-5xl">Say who to pay, and how much.</p>
               <p className="mt-4 text-mist">
                 For example: {EXAMPLES.map((x, i) => (
-                  <button key={x} type="button" onClick={() => setTyped(x)} className="text-paper/80 underline decoration-line underline-offset-4 hover:decoration-mist">
+                  <button key={x} type="button" onClick={() => setTyped(x)} className="text-paper/85 underline decoration-accent/50 underline-offset-4 transition hover:text-accent-hi hover:decoration-accent-hi">
                     {x}
                     {i < EXAMPLES.length - 1 ? "," : ""}
                   </button>
@@ -321,19 +367,26 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         )}
 
         {phase === "final" && view?.reply && (
-          <section
+          <motion.section
             aria-label="Result"
-            className={`rounded-3xl p-6 ring-1 sm:p-8 ${view.outcome === "done" ? "bg-signal/10 ring-signal/40" : view.outcome === "blocked" ? "bg-coral/10 ring-coral/50" : "ring-line"}`}
+            initial={{ opacity: 0, y: 20, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 26 }}
+            className={`relative overflow-hidden rounded-[28px] p-6 ring-1 sm:p-8 ${
+              view.outcome === "done" ? "bg-signal/[0.07] ring-signal/40" : view.outcome === "blocked" || view.outcome === "error" ? "bg-coral/[0.07] ring-coral/50" : "bg-panel ring-line"
+            }`}
           >
-            <p className={`font-display text-3xl font-bold ${view.outcome === "done" ? "text-signal" : view.outcome === "blocked" ? "text-coral" : "text-paper"}`}>
+            <div className="flex items-start gap-5">
+            <ResultMark outcome={view.outcome} />
+            <p className={`font-display leading-tight font-bold text-pretty ${view.reply.text.length > 90 ? "text-xl sm:text-2xl" : "text-2xl sm:text-3xl"} ${view.outcome === "done" ? "text-signal" : view.outcome === "blocked" || view.outcome === "error" ? "text-coral" : "text-paper"}`}>
               {view.reply.text}
             </p>
+            </div>
             {result?.qr && (
               <div className="mt-5 flex items-center gap-5">
-                {/* eslint-disable-next-line @next/next/no-img-element -- data URL from PayPal */}
-                <img src={result.qr} alt="QR code to pay this invoice" className="size-36 rounded-xl bg-white p-2" />
+                <motion.img initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.5 }} src={result.qr} alt="QR code to pay this invoice" className="size-36 rounded-xl bg-white p-2" />
                 {result.payUrl && (
-                  <a href={result.payUrl} target="_blank" rel="noreferrer" className="text-lg text-signal underline underline-offset-4">
+                  <a href={result.payUrl} target="_blank" rel="noreferrer" className="text-lg text-accent-hi underline underline-offset-4 hover:text-paper">
                     Open the PayPal invoice
                   </a>
                 )}
@@ -350,14 +403,14 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                       spokenCommand.current = false;
                       void runCommand(sug, "text", null);
                     }}
-                    className="rounded-full bg-paper px-5 py-2.5 font-bold text-ink hover:brightness-95"
+                    className="rounded-full bg-accent px-5 py-2.5 font-bold text-white transition hover:bg-accent-hi"
                   >
                     {sug}
                   </button>
                 ))}
               </div>
             )}
-          </section>
+          </motion.section>
         )}
 
         {error && (
@@ -371,24 +424,32 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
           </p>
         )}
 
-        <div className="flex items-center gap-5">
+        <div className="flex items-start gap-4 sm:items-center sm:gap-5">
           <button
             type="button"
             onClick={toggleMic}
             disabled={micBusy}
             aria-pressed={recorder.recording}
             aria-label={recorder.recording ? "Stop listening" : phase === "confirm" ? "Answer by voice" : "Speak a payment"}
-            className="relative flex size-24 shrink-0 items-center justify-center rounded-full bg-signal text-ink transition hover:brightness-110 disabled:opacity-60"
+            className={`relative flex size-20 shrink-0 sm:size-24 items-center justify-center rounded-full bg-accent text-white transition hover:bg-accent-hi disabled:opacity-60 ${
+              recorder.recording ? "shadow-[0_0_0_6px_color-mix(in_oklab,var(--color-accent)_25%,transparent),0_18px_50px_-10px_var(--color-accent)]" : "shadow-[0_18px_44px_-14px_var(--color-accent)]"
+            }`}
           >
+            {/* two rings that follow the voice level while recording */}
             <span
               aria-hidden
-              className="absolute inset-0 rounded-full bg-signal/30 transition-transform duration-75"
-              style={{ transform: `scale(${1 + recorder.level * 0.7})` }}
+              className="absolute inset-0 rounded-full bg-accent/25 transition-transform duration-75"
+              style={{ transform: `scale(${1 + recorder.level * 0.9})` }}
+            />
+            <span
+              aria-hidden
+              className="absolute -inset-2 rounded-full ring-2 ring-accent/30 transition-[transform,opacity] duration-150"
+              style={{ transform: `scale(${1 + recorder.level * 0.5})`, opacity: recorder.recording ? 1 : 0 }}
             />
             {micBusy ? (
-              <span className="relative size-8 animate-spin rounded-full border-4 border-ink/30 border-t-ink" />
+              <span className="relative size-8 animate-spin rounded-full border-4 border-white/30 border-t-white" />
             ) : recorder.recording ? (
-              <span className="relative size-7 rounded-md bg-ink" />
+              <span className="relative size-7 rounded-md bg-white" />
             ) : (
               <svg aria-hidden viewBox="0 0 24 24" className="relative size-10" fill="currentColor">
                 <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z" />
@@ -407,7 +468,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                       ? "Tap the mic to answer by voice"
                       : "Tap the mic and speak, or type below"}
             </p>
-            <form onSubmit={submitTyped} className="flex gap-2">
+            <form onSubmit={submitTyped} className="flex flex-wrap gap-2 sm:flex-nowrap">
               <label className="sr-only" htmlFor="typed">
                 {phase === "confirm" ? "Type yes or no" : "Type a payment"}
               </label>
@@ -416,9 +477,9 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
                 placeholder={phase === "confirm" ? "Type yes or no" : phase === "question" ? "Type your answer" : phase === "hold" ? "Type cancel to stop it" : receipt ? "Split with John and Maria" : "Or type it here"}
-                className="min-w-0 flex-1 rounded-full bg-panel px-5 py-3 text-paper ring-1 ring-line placeholder:text-mist/70 focus:ring-signal focus:outline-none"
+                className="min-w-0 basis-full rounded-full bg-panel px-5 py-3 sm:basis-auto sm:flex-1 text-paper ring-1 ring-line transition placeholder:text-mist/70 focus:ring-2 focus:ring-accent focus:outline-none"
               />
-              <label className={`cursor-pointer rounded-full px-4 py-3 ring-1 transition ${receipt ? "text-signal ring-signal" : "text-mist ring-line hover:ring-mist"}`}>
+              <label className={`cursor-pointer rounded-full px-4 py-3 ring-1 transition ${receipt ? "bg-accent/10 text-accent-hi ring-accent" : "text-mist ring-line hover:bg-raised hover:text-paper"}`}>
                 <span className="sr-only">Attach a receipt photo</span>
                 <span aria-hidden>{receipt ? "Receipt ✓" : "Receipt"}</span>
                 <input
@@ -433,11 +494,11 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                   }}
                 />
               </label>
-              <button type="submit" disabled={micBusy} className="rounded-full bg-paper px-5 py-3 font-bold text-ink disabled:opacity-50">
+              <button type="submit" disabled={micBusy} className="rounded-full bg-paper px-5 py-3 font-bold text-ink transition hover:bg-white disabled:opacity-50">
                 Send
               </button>
             </form>
-            <p className="flex items-center gap-2 pl-1 text-sm text-mist">
+            <p className="flex flex-wrap items-center gap-2 pl-1 text-sm text-mist">
               <label htmlFor="lang">Speaking</label>
               <select
                 id="lang"
@@ -446,7 +507,7 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                   setLang(e.target.value);
                   localStorage.setItem("sip-lang", e.target.value);
                 }}
-                className="rounded-md bg-transparent py-0.5 text-paper ring-1 ring-line"
+                className="rounded-md bg-transparent px-1 py-0.5 text-paper ring-1 ring-line"
               >
                 {LANGS.map((l) => (
                   <option key={l.id} value={l.id} className="bg-panel">
@@ -463,8 +524,12 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
                   setMutedState(m);
                   if (!m) primeAudio();
                 }}
-                className={`ml-3 rounded-md px-2 py-0.5 ring-1 transition ${muted ? "text-amber ring-amber/40" : "text-paper ring-line hover:ring-mist"}`}
+                className={`flex items-center gap-1.5 sm:ml-3 rounded-md px-2 py-0.5 ring-1 transition ${muted ? "text-amber ring-amber/40" : "text-paper ring-line hover:bg-raised"}`}
               >
+                <svg aria-hidden viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+                  {muted ? <path d="m16 9 5 6m0-6-5 6" /> : <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />}
+                </svg>
                 {muted ? "Voice off" : "Voice on"}
               </button>
             </p>
@@ -479,5 +544,6 @@ export function VoiceAgent({ linked }: { linked: boolean }) {
         <GuardianPanel guardian={view?.guardian ?? null} voice={view?.voice ?? null} />
       </aside>
     </div>
+    </MotionConfig>
   );
 }

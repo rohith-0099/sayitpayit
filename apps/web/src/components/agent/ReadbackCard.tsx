@@ -1,4 +1,9 @@
+"use client";
+
+import { motion } from "motion/react";
 import type { Readback } from "@/lib/agent/graph";
+
+const rise = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } };
 
 export function ReadbackCard({
   readback,
@@ -21,57 +26,94 @@ export function ReadbackCard({
 }) {
   const phrase = readback.challenge;
   return (
-    <section aria-label="Confirm payment" className="rounded-3xl bg-panel p-6 shadow-[0_24px_60px_-24px_rgba(0,0,0,0.6)] ring-1 ring-line sm:p-8">
-      <h2 className="font-display text-3xl font-bold tracking-tight">{readback.title}</h2>
-      <dl className="mt-5 flex flex-col divide-y divide-line">
-        {readback.lines.map((l) => (
-          <div key={l.label} className="flex items-baseline justify-between gap-6 py-2.5">
-            <dt className="text-mist">{l.label}</dt>
-            <dd className={l.emphasis ? "font-display text-2xl font-bold tabular-nums" : "text-lg tabular-nums"}>{l.value}</dd>
-          </div>
-        ))}
-      </dl>
-      {readback.notes.length > 0 && (
-        <ul className="mt-4 flex flex-col gap-1 text-sm text-mist">
-          {readback.notes.map((n) => (
-            <li key={n} className={n.startsWith("Guardian") ? "text-amber" : undefined}>
-              {n}
-            </li>
+    <motion.section
+      aria-label="Confirm payment"
+      initial={{ opacity: 0, y: 24, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 26 }}
+      className="relative overflow-hidden rounded-[28px] bg-panel p-6 ring-1 ring-line shadow-[0_40px_80px_-40px_rgba(0,0,0,0.8)] sm:p-8"
+    >
+      {/* the card's one accent: a lit top edge, the colour of "the agent is asking you" */}
+      <span aria-hidden className="absolute inset-x-8 top-0 h-px bg-accent shadow-[0_0_24px_2px_var(--color-accent)]" />
+
+      <motion.div initial="hidden" animate="show" transition={{ staggerChildren: 0.06, delayChildren: 0.12 }}>
+        <motion.h2 variants={rise} className="font-display text-3xl font-bold tracking-tight text-balance">
+          {readback.title}
+        </motion.h2>
+        <dl className="mt-5 flex flex-col">
+          {readback.lines.map((l) => (
+            <motion.div
+              key={l.label}
+              variants={rise}
+              className={`flex items-baseline justify-between gap-6 border-b border-line/70 last:border-0 ${l.emphasis ? "py-3.5" : "py-2.5"}`}
+            >
+              <dt className={l.emphasis ? "text-paper/90" : "text-mist"}>{l.label}</dt>
+              <dd className={l.emphasis ? "font-display text-[28px] leading-none font-bold tracking-tight tabular-nums" : "text-lg text-paper/90 tabular-nums"}>{l.value}</dd>
+            </motion.div>
           ))}
-        </ul>
-      )}
+        </dl>
+        {readback.notes.length > 0 && (
+          <motion.ul variants={rise} className="mt-4 flex flex-col gap-1.5 text-sm leading-snug text-mist">
+            {readback.notes.map((n) => (
+              <li key={n} className={n.startsWith("Guardian") ? "text-amber" : undefined}>
+                {n}
+              </li>
+            ))}
+          </motion.ul>
+        )}
+      </motion.div>
+
       {phrase && (
-        <div className="mt-6 rounded-2xl bg-ink/60 p-5 ring-1 ring-signal/40">
-          <p className="text-mist">To send it, say this out loud</p>
-          <p className="mt-2 flex flex-wrap gap-2" aria-label={`Say: ${phrase}`}>
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35, duration: 0.3 }}
+          className="mt-6 rounded-2xl bg-ink/70 p-5 ring-1 ring-accent/40"
+        >
+          <p className="text-paper/90">To send it, say this out loud</p>
+          <p className="mt-3 flex flex-wrap gap-2" aria-label={`Say: ${phrase}`}>
             {phrase.split(" ").map((w, i) => (
-              <span key={i} className="rounded-xl bg-panel px-4 py-2 font-display text-3xl font-bold tracking-tight text-signal ring-1 ring-line">
+              <motion.span
+                key={`${w}-${i}`}
+                initial={{ opacity: 0, y: 12, scale: 0.85 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ delay: 0.45 + i * 0.09, type: "spring", stiffness: 500, damping: 24 }}
+                className="rounded-xl bg-raised px-4 py-2 font-display text-3xl font-bold tracking-tight text-accent-hi ring-1 ring-accent/30"
+              >
                 {w}
-              </span>
+              </motion.span>
             ))}
           </p>
           <p className="mt-3 text-sm text-mist">A new phrase every time, in your voice, so a recording can&apos;t pay.</p>
-        </div>
+        </motion.div>
       )}
       {note && (
-        <p role="status" className="mt-4 rounded-xl bg-amber/10 px-4 py-2.5 text-amber ring-1 ring-amber/30">
+        <motion.p
+          key={note}
+          role="status"
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: [0, -4, 4, 0] }}
+          transition={{ duration: 0.35 }}
+          className="mt-4 rounded-xl bg-amber/10 px-4 py-2.5 text-amber ring-1 ring-amber/30"
+        >
           {note}
-        </p>
+        </motion.p>
       )}
-      <div className="mt-6 flex flex-wrap items-center gap-3">
-        <button
+      <div className="mt-7 flex flex-wrap items-center gap-3">
+        <motion.button
           type="button"
+          whileTap={{ scale: 0.97 }}
           onClick={phrase ? onSayPhrase : onYes}
           disabled={busy || (phrase ? listening : false)}
-          className="rounded-full bg-signal px-7 py-3 text-lg font-bold text-ink transition hover:brightness-110 disabled:opacity-50"
+          className="rounded-full bg-accent px-7 py-3 text-lg font-bold text-white shadow-[0_10px_30px_-10px_var(--color-accent)] transition hover:bg-accent-hi disabled:opacity-50"
         >
           {phrase ? (listening ? "Listening…" : "Say the phrase") : "Yes, send it"}
-        </button>
+        </motion.button>
         <button
           type="button"
           onClick={onNo}
           disabled={busy}
-          className="rounded-full px-6 py-3 text-lg text-paper ring-1 ring-line transition hover:ring-mist disabled:opacity-50"
+          className="rounded-full px-6 py-3 text-lg text-paper ring-1 ring-line transition hover:bg-raised disabled:opacity-50"
         >
           Cancel
         </button>
@@ -79,6 +121,6 @@ export function ReadbackCard({
           {phrase ? "" : listening ? "Listening for yes or no…" : reask ? "I need a clear yes or no." : "Or just say yes."}
         </p>
       </div>
-    </section>
+    </motion.section>
   );
 }

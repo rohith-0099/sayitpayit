@@ -12,7 +12,7 @@ import { guardianConfigured } from "@/lib/guardian-url";
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-12 px-6 py-8 sm:px-10 lg:py-10">
+    <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-10 px-4 py-6 sm:gap-12 sm:px-10 lg:py-10">
       <Suspense fallback={<Header />}>
         <HeaderWithUser />
       </Suspense>
@@ -34,7 +34,7 @@ function Header({ children }: { children?: React.ReactNode }) {
     <header className="flex flex-wrap items-center justify-between gap-4">
       <p className="font-display text-2xl font-bold tracking-tight">
         SayItPayIt
-        <span className="ml-3 align-middle text-sm font-normal text-mist">PayPal sandbox</span>
+        <span className="ml-3 rounded-full px-2.5 py-1 align-middle text-xs font-medium text-mist ring-1 ring-line">PayPal sandbox</span>
       </p>
       {children}
     </header>
@@ -47,8 +47,8 @@ async function HeaderWithUser() {
   const voice = await getVoiceProfile(user.id);
   return (
     <Header>
-      <nav className="flex items-center gap-6 text-sm">
-        <Link href="/dashboard" className="text-paper hover:text-signal">
+      <nav className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 text-sm [&>*]:whitespace-nowrap">
+        <Link href="/dashboard" className="text-paper transition hover:text-accent-hi">
           Dashboard
         </Link>
         {!guardianConfigured() ? (
@@ -58,7 +58,7 @@ async function HeaderWithUser() {
             {voice ? "Voice ID on" : "Set up Voice ID"}
           </Link>
         )}
-        <Link href="/link" className="text-mist hover:text-paper">
+        <Link href="/link" className="max-w-full truncate text-mist transition hover:text-accent-hi">
           {user.paypalVaultId ? <>Paying from {user.paypalPayerEmail ?? "your PayPal"}</> : "Link your PayPal"}
         </Link>
       </nav>

@@ -1,23 +1,28 @@
 @import "tailwindcss";
 
 /* SayItPayIt tokens
-   ink     #0E1A2B  base (blue-black, nods to PayPal navy)
-   panel   #16263B  raised surfaces
-   line    #24384F  hairlines
-   paper   #EAF0F6  text
-   mist    #8FA3B8  secondary text
-   signal  #3FD0B6  the agent working / safe to go
-   amber   #F2B544  Guardian: caution
-   coral   #FF6B5E  Guardian: stopped / errors */
+   ink     #0A1426  base: deep navy
+   panel   #101E36  raised surfaces
+   raised  #15274A  surfaces on surfaces (chips, inputs)
+   line    #1E3150  hairlines
+   paper   #EEF3FA  text
+   mist    #8DA2BE  secondary text
+   accent  #2F7CFF  the agent: mic, primary actions, links, the active step (PayPal-style blue, our own shade)
+   signal  #2BD4A4  safe / paid only
+   amber   #F5B641  Guardian: caution
+   coral   #FF5A5F  Guardian: stopped / scam / errors */
 @theme {
-  --color-ink: #0e1a2b;
-  --color-panel: #16263b;
-  --color-line: #24384f;
-  --color-paper: #eaf0f6;
-  --color-mist: #8fa3b8;
-  --color-signal: #3fd0b6;
-  --color-amber: #f2b544;
-  --color-coral: #ff6b5e;
+  --color-ink: #0a1426;
+  --color-panel: #101e36;
+  --color-raised: #15274a;
+  --color-line: #1e3150;
+  --color-paper: #eef3fa;
+  --color-mist: #8da2be;
+  --color-accent: #2f7cff;
+  --color-accent-hi: #5b9bff;
+  --color-signal: #2bd4a4;
+  --color-amber: #f5b641;
+  --color-coral: #ff5a5f;
   --font-scripts: var(--font-noto), var(--font-noto-ta), var(--font-noto-ml), var(--font-noto-hi);
   --font-display: var(--font-bricolage), var(--font-scripts), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-lexend), var(--font-scripts), ui-sans-serif, system-ui, sans-serif;
@@ -28,13 +33,17 @@ html {
 }
 
 body {
-  background: var(--color-ink);
+  /* One soft light source top-left, like a lit desk at night; the rest stays flat navy. */
+  background:
+    radial-gradient(1200px 600px at 12% -10%, color-mix(in oklab, var(--color-accent) 16%, transparent), transparent 60%),
+    var(--color-ink);
+  background-attachment: fixed;
   color: var(--color-paper);
   font-family: var(--font-sans);
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-signal);
+  outline: 2px solid var(--color-accent-hi);
   outline-offset: 3px;
 }
 
@@ -45,4 +54,14 @@ body {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Wire between flow nodes: a dashed line that "flows" while that step is working. */
+@keyframes wire-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+.wire-flow {
+  animation: wire-flow 0.6s linear infinite;
 }

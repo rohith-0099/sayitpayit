@@ -46,8 +46,8 @@ export function ActivityLists({ initial, homeCurrency, limit = 8 }: { initial: {
   const owedTotal = data.owed.reduce((a, o) => a + Number(o.homeAmount ?? o.amount), 0);
 
   return (
-    <section className="grid gap-10 border-t border-line pt-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
-      <div>
+    <section className="grid grid-cols-1 gap-10 border-t border-line pt-10 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] lg:gap-14">
+      <div className="min-w-0">
         <h2 className="font-display text-xl font-bold">Recent</h2>
         <ul className="mt-3 divide-y divide-line">
           {data.activity.map((tx) => {
@@ -68,7 +68,7 @@ export function ActivityLists({ initial, homeCurrency, limit = 8 }: { initial: {
           })}
         </ul>
       </div>
-      <div>
+      <div className="min-w-0">
         <h2 className="font-display text-xl font-bold">Waiting on</h2>
         {data.owed.length === 0 ? (
           <p className="mt-3 text-mist">Nobody owes you anything right now.</p>

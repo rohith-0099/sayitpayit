@@ -152,6 +152,7 @@ Pretrained models, datasets, libraries and approaches this project uses, with th
 | [Gemini](https://ai.google.dev/) (Google AI Studio, free tier) | Intent parsing in any language, receipt photos, translations, TTS fallback | Gemini API terms |
 | [Groq](https://groq.com/) Whisper `whisper-large-v3-turbo` (OpenAI Whisper weights) | Speech-to-text | Groq terms; Whisper MIT |
 | [LangGraph.js](https://github.com/langchain-ai/langgraphjs) | The agent's fixed, auditable flow (Guardian and Confirm can't be skipped) | MIT |
+| [Motion](https://motion.dev/) (`motion`, formerly Framer Motion) | UI animations: the agent flow, read-back card, Guardian gauge | MIT |
 | [Frankfurter](https://frankfurter.dev/) (ECB reference rates) | Indicative FX for read-backs | Free, no key |
 | [Noto Sans](https://fonts.google.com/noto), Bricolage Grotesque, Lexend (Google Fonts) | UI type in every script | SIL OFL 1.1 |
 | [Fraud Detection Handbook](https://github.com/fraud-detection-handbook/fraud-detection-handbook) | Approach for Guardian's per-user behaviour signals (new payee, amount spike, unusual hour) | Approach only |
