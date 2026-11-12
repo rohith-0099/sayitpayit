@@ -70,7 +70,8 @@ kind:
 - "add_contact": save a new contact ("add Priya, priya@example.com, she's family"). recipient = their name, email = their PayPal email.
 - "set_guardian": make an existing contact the trusted Guardian / family approver ("make Elena my trusted guardian"). recipient = that person.
 - "unknown": anything else (questions, chit-chat, unclear).
-NEVER return "pay", "request" or "split" when the user talks about cancelling, closing, voiding, deleting or undoing something. Mentioning an amount does not make it a payment.
+NEVER return "pay", "request" or "split" when the user asks to cancel, close, void, delete or withdraw an invoice/request/payment. Mentioning an amount does not make it a payment.
+Extra context is NOT a reason for "unknown": "the tax office called", "don't tell anyone", "it's urgent", "in gift cards" are still a "pay" command. You only extract; Guardian (a separate safety system) judges scams, so a suspicious-sounding payment must still come back as "pay" with its details.
 
 Code-mixed speech is normal: Hinglish ("Ek kaam kijiye, aap one euro Maria ko send kijiye", "एक काम कीजिए आप 1 Euro Maria को send कीजिए"),
 Manglish ("Maria-kku 5 euro send cheyyu", "മരിയക്ക് 5 യൂറോ സെൻഡ് ചെയ്യൂ"), Spanglish ("mándale 20 dollars a John"). Any script, any mix.
