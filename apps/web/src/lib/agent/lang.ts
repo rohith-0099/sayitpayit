@@ -4,6 +4,8 @@
 
 export const SUPPORTED = ["en", "es", "ml", "ta", "hi", "de", "fr", "pt"] as const;
 const LATIN = new Set(["en", "es", "de", "fr", "pt", "it"]);
+/** Languages commonly typed/spoken in Latin letters (Hinglish, Manglish, Tanglish). */
+const ROMANIZED_OK = new Set(["hi", "ml", "ta"]);
 
 const SCRIPTS: [RegExp, string][] = [
   [/[஀-௿]/u, "ta"], // Tamil
@@ -21,13 +23,13 @@ export function scriptLanguage(text: string): string | null {
 export function resolveLanguage(opts: { text: string; llm?: string | null; whisper?: string | null }): string {
   const script = scriptLanguage(opts.text);
   if (script) return script;
-  // Latin-script text: a non-Latin guess (e.g. Whisper saying "ta" for English) can't be right.
+  // Latin-script text. The LLM reads the words, so it can tell romanized Hinglish/Manglish ("Maria-kku
+  // 5 euro send cheyyu" → ml) from English. Whisper's audio guess can't: it calls accented English
+  // "ta", so a non-Latin Whisper guess is never trusted for Latin text.
   const llm = opts.llm?.toLowerCase().slice(0, 2);
-  if (llm && LATIN.has(llm)) return llm;
+  if (llm && (LATIN.has(llm) || ROMANIZED_OK.has(llm))) return llm;
   const whisper = opts.whisper?.toLowerCase().slice(0, 2);
   if (whisper && LATIN.has(whisper)) return whisper;
   return "en";
 }
 
-/** Whisper auto-detect is reliable for these; anything else on "Any language" gets re-checked as English. */
-export const AUTO_DETECT_OK = new Set(["en", "es"]);

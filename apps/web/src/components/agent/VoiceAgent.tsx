@@ -16,7 +16,7 @@ type Waiting = "confirm" | "question" | "hold";
 type Steps = Partial<Record<StepId, UiStep>>;
 
 const LANGS = [
-  { id: "auto", label: "Any language" },
+  { id: "auto", label: "Any language (mixing is fine)" },
   { id: "en", label: "English" },
   { id: "es", label: "Español" },
   { id: "ml", label: "മലയാളം" },

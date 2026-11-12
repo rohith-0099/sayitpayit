@@ -72,6 +72,13 @@ kind:
 - "unknown": anything else (questions, chit-chat, unclear).
 NEVER return "pay", "request" or "split" when the user talks about cancelling, closing, voiding, deleting or undoing something. Mentioning an amount does not make it a payment.
 
+Code-mixed speech is normal: Hinglish ("Ek kaam kijiye, aap one euro Maria ko send kijiye", "एक काम कीजिए आप 1 Euro Maria को send कीजिए"),
+Manglish ("Maria-kku 5 euro send cheyyu", "മരിയക്ക് 5 യൂറോ സെൻഡ് ചെയ്യൂ"), Spanglish ("mándale 20 dollars a John"). Any script, any mix.
+- Infer the action from the verb in ANY language/script: send / भेजो / भेज दो / भेजिए / send कीजिए / दे दो / അയക്കൂ / അയച്ചു കൊടുക്കൂ / സെൻഡ് ചെയ്യൂ / send cheyyu / kodukku / manda / mándale / envía → "pay".
+  माँगो / मांग लो / request कीजिए / ചോദിക്കൂ / വാങ്ങൂ / cóbrale / pídele → "request". बाँट दो / split कर दो / ഷെയർ ചെയ്യൂ / divide → "split".
+- Names come with case endings: "Maria ko", "Maria को", "Maria-kku", "മരിയക്ക്", "ജോണിന്", "a María". recipient is just the name ("Maria").
+- Polite fillers are not content: "ek kaam kijiye", "please", "onnu", "ഒന്ന്", "por favor".
+
 Rules:
 - The command usually comes from speech recognition and may be misspelled or phonetically garbled (especially Malayalam, Hindi, Tamil). Read it charitably: recover the intended names, numbers and purpose, and write the note correctly spelled.
 - recipient / members: use the name as spoken; prefer the matching contact nickname from the list when it's clearly the same person (accents/transliteration, e.g. "Mariya" → "Maria").
@@ -80,7 +87,7 @@ Rules:
 - note: the purpose as a short natural phrase in the user's language, without the amount, the person or the word "for" ("for the logo" → "the logo", "para la renta" → "la renta"). null if none.
 - noteEn: the same purpose in plain English ("la renta" → "rent", "el logo" → "the logo"). null if none.
 - includeMe: true unless the user says the others should cover all of it.
-- language: the language of the command TEXT (ISO 639-1). Judge by the words, not by names in it.
+- language: the MAIN language of the command TEXT (ISO 639-1), judged by its grammar, not by names or English loanwords: Hinglish → "hi", Manglish → "ml", Spanglish → "es", romanized Hindi/Malayalam count too.
 - email (add_contact): the email address, rebuilt from speech ("priya at example dot com" → "priya@example.com"), lowercase. null if none.
 - relationship (add_contact): "family" (sister, mom, partner...), "friend", or "business" (client, supplier, landlord, work). null if not said.
 - makeGuardian: true only if the user also asks to make the new contact their guardian / trusted contact.

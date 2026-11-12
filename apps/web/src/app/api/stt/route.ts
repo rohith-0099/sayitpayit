@@ -1,6 +1,8 @@
 import { transcribe } from "@/lib/ai/groq";
 import { getAgent } from "@/lib/agent/graph";
-import { AUTO_DETECT_OK } from "@/lib/agent/lang";
+import { transcribeWithGemini } from "@/lib/ai/gemini-stt";
+import type { Transcript } from "@/lib/ai/groq";
+import { geminiFirst, secondOpinion } from "@/lib/ai/stt-route";
 import { ApiError, handle } from "@/lib/api";
 import { getCurrentUser, listContacts } from "@/lib/users";
 import { recordVoiceCheck } from "@/lib/voice";
@@ -10,7 +12,7 @@ const MAX_BYTES = 10 * 1024 * 1024; // commands are a few seconds
 /**
  * POST multipart {audio, language?, kind?: "command"|"answer", threadId?}
  *  → {text, language, voice: {checkId, ...} | null}
- * Whisper transcribes; if the user enrolled a voiceprint, Guardian checks the SAME recording
+ * Whisper transcribes clear English/Spanish; Gemini handles code-mixed speech (see stt-route.ts); if the user enrolled a voiceprint, Guardian checks the SAME recording
  * (speaker + spoof, and for answers the conversation's challenge phrase, looked up server-side).
  */
 export async function POST(req: Request) {
@@ -35,16 +37,39 @@ export async function POST(req: Request) {
     // included: Whisper can echo its prompt on unclear audio, which would let noise "pass" the challenge.
     const prompt = `SayItPayIt payment. Contacts: ${contacts.map((c) => c.nickname).join(", ")}.`;
     const hint = /^[a-z]{2}$/.test(lang) ? lang : undefined;
-    let t = await transcribe(audio, { prompt, language: hint });
-    // "Any language": Whisper's audio guess is unreliable outside English/Spanish (it has heard
-    // accented English as Tamil). Re-transcribe as English; picking a language in the UI skips this.
-    if (!hint && (!t.language || !AUTO_DETECT_OK.has(t.language))) {
-      t = { ...(await transcribe(audio, { prompt, language: "en" })), language: "en" };
-    }
+    const names = contacts.map((c) => c.nickname);
+    const gemini = () => transcribeWithGemini(audio, { contacts: names, hint });
 
-    const check = await recordVoiceCheck(user, audio, t.text, { kind, threadId, expectedPhrase });
+    // Clear single-language English/Spanish: Whisper (fast). Code-mixed (Hinglish, Manglish...),
+    // an Indian language picked, or a shaky Whisper result: Gemini Flash listens again.
+    let t: Transcript;
+    let reason: string | null = geminiFirst(hint) ? `picked ${hint}` : null;
+    let unclear = false;
+    if (!reason) {
+      t = await transcribe(audio, { prompt, language: hint });
+      reason = secondOpinion(t, hint);
+    }
+    if (reason) {
+      try {
+        const g = await gemini();
+        unclear = !g.clear;
+        t = g;
+      } catch (e) {
+        // Gemini busy: fall back to Whisper (as English on "Any language", which beats a wrong-language guess).
+        console.warn("[stt] Gemini transcription failed, using Whisper", e instanceof Error ? e.message : e);
+        t = await transcribe(audio, { prompt, language: hint ?? "en" });
+        if (!hint) t.language = "en";
+      }
+    }
+    console.log(`[stt] ${t!.engine}${reason ? ` (${reason})` : ""}: ${t!.text}`);
+    // Never guess: an unclear transcript asks the user to repeat or type instead of running.
+    if (unclear && kind === "command") throw new ApiError(422, "I couldn't make that out clearly. Please say it again, or type it.", { code: "STT_UNCLEAR" });
+
+    const check = await recordVoiceCheck(user, audio, t!.text, { kind, threadId, expectedPhrase });
     return {
-      ...t,
+      text: t!.text,
+      language: t!.language,
+      engine: t!.engine,
       voice: check && {
         checkId: check.id,
         status: check.status,

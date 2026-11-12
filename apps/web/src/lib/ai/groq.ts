@@ -7,6 +7,12 @@ export interface Transcript {
   /** ISO-639-1 when Whisper reports one (e.g. "es", "ml"). */
   language: string | null;
   durationSec: number | null;
+  /** Whisper's confidence: mean avg_logprob over segments (closer to 0 = surer; < -0.6 is shaky). */
+  avgLogprob?: number | null;
+  /** Highest compression ratio over segments (> 2.4 usually means repeated/hallucinated text). */
+  compression?: number | null;
+  /** Which engine produced the text. */
+  engine?: "whisper" | "gemini";
 }
 
 // Whisper reports full language names in verbose_json.
@@ -42,10 +48,16 @@ export async function transcribe(audio: Blob, opts: { language?: string; prompt?
     if (r.status === 429) throw new ApiError(503, "Speech-to-text is rate-limited (Groq free tier). Wait a few seconds and try again.", { code: "STT_RATE_LIMIT" });
     if (!r.ok) throw new ApiError(502, `Speech-to-text failed: ${json.error?.message ?? r.status}`);
     const lang = typeof json.language === "string" ? json.language.toLowerCase() : null;
+    const segs: { avg_logprob?: number; compression_ratio?: number }[] = Array.isArray(json.segments) ? json.segments : [];
+    const lps = segs.map((x) => x.avg_logprob).filter((x): x is number => typeof x === "number");
+    const crs = segs.map((x) => x.compression_ratio).filter((x): x is number => typeof x === "number");
     return {
       text: String(json.text ?? "").trim(),
       language: lang ? (LANG[lang] ?? (lang.length === 2 ? lang : null)) : null,
       durationSec: typeof json.duration === "number" ? json.duration : null,
+      avgLogprob: lps.length ? lps.reduce((a, b) => a + b, 0) / lps.length : null,
+      compression: crs.length ? Math.max(...crs) : null,
+      engine: "whisper",
     };
   }
   throw new ApiError(503, "Speech-to-text unavailable. Try again.");

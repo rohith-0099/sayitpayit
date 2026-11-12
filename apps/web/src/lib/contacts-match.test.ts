@@ -51,3 +51,14 @@ test("unknown name → none", () => {
   assert.equal(matchContact("Zed", book).kind, "none");
   assert.equal(matchContact("", book).kind, "none");
 });
+
+test("misheard names and code-mixed case endings still find the contact", () => {
+  const id = (q: string) => { const r = matchContact(q, book); return r.kind === "exact" ? r.contact.id : r.kind; };
+  assert.equal(id("Mariah"), "maria");
+  assert.equal(id("Maria-kku"), "maria");
+  assert.equal(id("Maria ko"), "maria");
+  assert.equal(id("Mariyakku"), "maria");
+  assert.equal(id("Jhon"), "john");
+  assert.equal(id("Ann"), "none"); // too short to fuzz: ask instead of guessing
+  assert.equal(id("Bob"), "none");
+});
