@@ -156,10 +156,6 @@ Pretrained models, datasets, libraries and approaches this project uses, with th
 | [AG Studio](https://www.ag-grid.com/studio/) 3.1 (`ag-studio`, `ag-studio-react`), AG Grid | Money dashboard, custom widgets, Studio AI agent (our Gemini adapter) | AG Studio: commercial (hackathon/trial); AG Grid community: MIT |
 | [PayPal + AG Studio hackathon boilerplate](https://github.com/paypaldev/hackathon-paypal-ag-grid-boilerplate) | Reference for wiring Studio (theme, data sources, AI harness); our code is written from it, not copied | No license stated |
 
-## Acknowledgements
-
-SayItPayIt was started for the PayPal AI Hackathon 2026.
-
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party components keep their own licenses (above).
