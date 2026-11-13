@@ -2,30 +2,39 @@
 
 **Pay anyone, anywhere, just by saying it, and the scam stops before the money leaves.**
 
-SayItPayIt is a voice payment agent on PayPal. Say *"Pay Maria 50 euros for the logo"* in English, Spanish or
-another language: the agent understands it, **Guardian** checks your voice and the payment for scam signs,
-it reads back exactly what Maria receives and what you pay (FX and fees included), and nothing moves until
-you confirm, by saying a fresh random phrase in your own voice.
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+![PayPal sandbox](https://img.shields.io/badge/PayPal-sandbox%20only-black)
+![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 
-Built for the **PayPal AI Hackathon 2026**. Everything runs on the **PayPal sandbox**; no real money moves.
+<!-- Add a screenshot or demo GIF here, e.g. the read-back card or the Scam Interrupt:
+![SayItPayIt read-back and Scam Interrupt](docs/screenshot.png) -->
 
-- Demo video: _link added at submission_
-- Live app (lite mode): _Render URL added at submission_. Full voice Guardian runs locally (see below and the video).
+Say *"Pay Maria 50 euros for the logo"* in English, Spanish or another language. SayItPayIt understands the command, and its **Guardian** layer checks your voice and the payment for scam signs. It reads back exactly what Maria receives and what you pay (exchange rate and fees included). Nothing moves until you confirm by saying a fresh random phrase in your own voice, so a recording of you can't pay.
+
+Everything runs on the **PayPal sandbox**. No real money moves.
+
+## Quick start
+
+You need Docker, free keys from [Google AI Studio](https://aistudio.google.com/) (Gemini) and [Groq](https://console.groq.com/), and a PayPal **sandbox** app with Payouts, Invoicing, Transaction Search and Vault enabled ([developer.paypal.com](https://developer.paypal.com/)).
+
+```bash
+git clone https://github.com/rohith-0099/sayitpayit.git && cd sayitpayit
+cp .env.example apps/web/.env.local       # add the PayPal sandbox, Gemini and Groq keys
+docker compose --profile full up --build  # open http://localhost:3000
+```
+
+This starts Postgres, the Guardian ML service and the web app. The first build takes about 15 minutes, because it trains the scam classifier and downloads the voice models. Later starts are quick. Then link a sandbox PayPal at `/link` and set up Voice ID at `/voice`.
 
 ## What it does
 
-| | |
-|---|---|
-| **Voice pay** | "Pay Maria 50 euros for the logo." Read-back with the exchange rate, PayPal's published fees, Friends & Family vs Goods & Services, and exactly what the recipient gets. You're charged exactly what you heard. |
-| **Request** | "Ask John for 200 dollars for the website." A PayPal invoice (always in English) with a QR code. |
-| **Split** | By voice, or snap a receipt: Gemini vision reads the total, one invoice per person. |
-| **Any language** | Replies in the language you spoke (judged from the words, not just the audio). Spanish is solid; Malayalam/Tamil/Hindi work with the language picker. |
-| **Voice ID** | Speaker verification on every spoken command; payments need a fresh random phrase ("blue 4 7 9 2") said in your voice, so a recording of you can't pay. |
-| **Scam Interrupt** | Scam-sounding payments get bank-style questions written by Gemini from the warning signs. Honest answers continue; scam answers put the payment **on hold** for a trusted family member, who approves or stops it from a link. |
-| **Money dashboard** | AG Studio: custom widgets (Guardian shield, Who owes what, Cross-border tracker), a transaction grid with Guardian's risk score, and Studio's AI agent running on Gemini: "show what I sent Maria this month" builds the chart live. |
-| **Natural voice** | Kokoro-82M (`af_heart`) for the agent's voice, Gemini TTS for other languages. |
+- **Voice pay.** It reads back the exchange rate, PayPal's published fees and exactly what the recipient gets, and charges exactly what you heard.
+- **Request and split.** "Ask John for 200 dollars for the website" creates a PayPal invoice with a QR code. You can snap a receipt and Gemini reads the total, then it sends one invoice per person.
+- **Any language.** It replies in the language you spoke. Spanish is solid, and Malayalam, Tamil and Hindi work with the language picker.
+- **Voice ID.** Speaker verification runs on every spoken command, and payments need a fresh random phrase said in your voice.
+- **Scam Interrupt.** Scam-sounding payments get bank-style questions. Honest answers continue; scam answers put the payment **on hold** for a trusted family member, who approves or stops it from a link.
+- **Money dashboard.** Custom AG Studio widgets and a transaction grid with Guardian's risk score. Ask "show what I sent Maria this month" and the chart builds live.
 
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
@@ -48,11 +57,14 @@ flowchart LR
   db --> dash[AG Studio dashboard<br/>custom widgets + Gemini agent]
 ```
 
+The agent is a fixed LangGraph.js graph, so Guardian and the confirmation step are part of the structure, not instructions in a prompt. **No payment can skip them.**
+
 - `apps/web`: Next.js 16 (App Router, TypeScript): UI, API routes, the LangGraph.js agent, all PayPal calls.
 - `services/guardian`: FastAPI (Python, CPU): `/voice/enroll`, `/voice/verify`, `/scam/classify`, `/tts`, `/health`.
 - Postgres with Drizzle ORM; LangGraph checkpoints in Postgres, so a pending confirmation survives a restart.
 
-## How PayPal is used
+<details>
+<summary><b>How PayPal is used</b></summary>
 
 - **Vault v3 + JS SDK v6**: link your PayPal once ("Save PayPal", no purchase). The payment token never reaches the browser.
 - **Orders v2** with the vaulted token: charges you, with no popup, exactly the read-back total.
@@ -65,30 +77,38 @@ Sandbox demo architecture: funds pass through the merchant account between the c
 this in production would need money-transmission licensing. "Friends & Family vs Goods & Services" is our
 label for fee display; Payouts doesn't set it on PayPal's side.
 
-## How AI is used
+</details>
+
+<details>
+<summary><b>How AI is used</b></summary>
 
 - **Gemini** (free tier, `gemini-3.5-flash-lite` with fallbacks): intent from any language, receipt photos, translations, Scam Interrupt questions and verdicts, and AG Studio's agent loop (function calling through our adapter).
 - **Groq Whisper** (`whisper-large-v3-turbo`): speech-to-text.
 - **Our models**: a multilingual scam-command classifier we fine-tuned on a dataset we generated (1,600 commands, 8 languages, 10 scam tactics + hard negatives: `services/guardian/data/scam_commands.jsonl`, metrics in `docs/metrics/scam_classifier.json`), and Voice ID with SpeechBrain ECAPA.
 - **LangGraph.js**: the agent is a fixed graph, so Guardian and the confirmation are structural, not prompts.
 
-## Run it locally
+</details>
 
-Get free keys from [Google AI Studio](https://aistudio.google.com/) (Gemini) and [Groq](https://console.groq.com/),
-and a PayPal **sandbox** app (Payouts, Invoicing, Transaction Search and Vault enabled) from developer.paypal.com.
+## Results
 
-### One command: the full stack (Docker)
+The multilingual scam-command classifier was fine-tuned from `paraphrase-multilingual-MiniLM-L12-v2` on a dataset we generated: 1,600 commands across 8 languages, covering 10 scam tactics plus hard negatives.
 
-```bash
-cp .env.example apps/web/.env.local     # fill in the PayPal sandbox, Gemini and Groq keys
-docker compose --profile full up --build
-```
+| Test set | Precision | Recall | F1 |
+|---|---|---|---|
+| 219 held-out commands, 8 languages | 0.954 | 1.000 | 0.976 |
 
-Then open http://localhost:3000. This starts Postgres, the Guardian ML service (Voice ID, scam model, Kokoro
-voice) and the web app. The first build takes about 15 minutes, because it trains our scam classifier and
-downloads the voice models; later starts are quick.
+The data is synthetic (Gemini-generated), so real-world accuracy will be lower. That's why the classifier is one Guardian signal among several, not the only check. The full metrics, including per-language scores, are in [`docs/metrics/scam_classifier.json`](docs/metrics/scam_classifier.json).
 
-### Developer setup (hot reload)
+## Limitations
+
+- Sandbox only, single demo user (no sign-up).
+- The scam classifier is trained on synthetic (Gemini-generated) data: real-world accuracy will be lower than the reported test scores, so it is one Guardian signal, not the only one.
+- AASIST-L (trained on ASVspoof 2019) misfires on real microphones, so it only raises a weak signal; the random spoken phrase is the real anti-replay check.
+- Whisper's language auto-detect is reliable for English/Spanish; other languages need the picker.
+- The family approval link is shown on screen in the demo; production would send it by SMS.
+- Planned but cut for time: an XGBoost risk model on PaySim, passkey step-up, hands-free wake word.
+
+## Development
 
 You need Node 22+, Python 3.12 with [uv](https://docs.astral.sh/uv/), and Docker.
 
@@ -105,36 +125,12 @@ uv pip install --python .venv -r requirements.txt
 .venv/bin/python training/scam_classifier.py      # ~4 min on CPU, builds the scam model
 .venv/bin/uvicorn app.main:app --port 8000
 
-# 3. Open http://localhost:3000/link and link the sandbox PayPal below, then /voice to set up Voice ID.
+# 3. Open http://localhost:3000/link and link a sandbox PayPal, then /voice to set up Voice ID.
 ```
 
-Hosting: the live demo runs free on Render (`render.yaml`, Singapore) with a free Neon Postgres, in
-**lite mode**: Guardian's ML service (Voice ID, scam model, natural voice) needs more memory than free hosting
-gives, so the hosted app uses Guardian's built-in rules, Gemini TTS or the browser voice, and shows a banner.
-Every payment there still goes through Guardian and waits for your yes. The full experience is the
-one-command Docker stack above (and the demo video).
+Without the Guardian service, the app runs in **lite mode**: Guardian's built-in rules, Gemini TTS or the browser voice, and a banner. `render.yaml` deploys this lite mode free on Render with a Neon Postgres. Every payment there still goes through Guardian and waits for your yes.
 
-Handy: `npm run demo:reset` (local retakes), `npm run test:guardian-flow` (Scam Interrupt end to end),
-`npm test` (web unit tests), `.venv/bin/python -m pytest` (Guardian).
-
-## Sandbox logins for judges
-
-PayPal **sandbox** accounts (fake money). Passwords are in the Devpost submission notes.
-
-| Role | Sandbox email |
-|---|---|
-| Sam (the demo user's PayPal, for /link) | `sb-xc9mg53757606@personal.example.com` |
-| John (US, USD) | `sb-avlzc53756906@personal.example.com` |
-| Maria (Germany, EUR) | `sb-nipbf53756879@personal.example.com` |
-
-## Honest limitations
-
-- Sandbox only, single demo user (no sign-up).
-- The scam classifier is trained on synthetic (Gemini-generated) data: real-world accuracy will be lower than the reported test scores, so it is one Guardian signal, not the only one.
-- AASIST-L (trained on ASVspoof 2019) misfires on real microphones, so it only raises a weak signal; the random spoken phrase is the real anti-replay check.
-- Whisper's language auto-detect is reliable for English/Spanish; other languages need the picker.
-- The family approval link is shown on screen in the demo; production would send it by SMS.
-- Planned but cut for time: an XGBoost risk model on PaySim, passkey step-up, hands-free wake word.
+Tests: `npm test` (web), `.venv/bin/python -m pytest` (Guardian), `npm run test:guardian-flow` (Scam Interrupt end to end).
 
 ## Credits
 
@@ -159,6 +155,10 @@ Pretrained models, datasets, libraries and approaches this project uses, with th
 | [NVIDIA Financial Fraud Detection Blueprint](https://build.nvidia.com/nvidia/financial-fraud-detection) | Inspiration for payee-based signals (first payment to a payee) | Approach only |
 | [AG Studio](https://www.ag-grid.com/studio/) 3.1 (`ag-studio`, `ag-studio-react`), AG Grid | Money dashboard, custom widgets, Studio AI agent (our Gemini adapter) | AG Studio: commercial (hackathon/trial); AG Grid community: MIT |
 | [PayPal + AG Studio hackathon boilerplate](https://github.com/paypaldev/hackathon-paypal-ag-grid-boilerplate) | Reference for wiring Studio (theme, data sources, AI harness); our code is written from it, not copied | No license stated |
+
+## Acknowledgements
+
+SayItPayIt was started for the PayPal AI Hackathon 2026.
 
 ## License
 

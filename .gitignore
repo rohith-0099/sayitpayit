@@ -158,3 +158,6 @@ __pycache__/
 # Guardian raw datasets (e.g. PaySim from Kaggle) and model downloads
 services/guardian/data/raw/
 services/guardian/pretrained_models/
+CLAUDE.md
+docs/PLAN.md
+docs/VIDEO_SCRIPT.md
